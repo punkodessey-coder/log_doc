@@ -45,7 +45,9 @@ def find_npm():
 
 def build_frontend():
     fe = ROOT / "frontend"
-    if (fe / "dist" / "index.html").exists():
+    idx = fe / "dist" / "index.html"
+    if idx.exists() and all(f.stat().st_mtime <= idx.stat().st_mtime
+                            for f in list((fe / "src").glob("*")) + [fe / "package.json"]):
         return
     try:
         npm, env = find_npm()
