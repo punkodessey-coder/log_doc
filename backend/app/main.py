@@ -5,6 +5,8 @@ import html as htmllib
 import io
 import json
 import re
+import mimetypes
+import xml.etree.ElementTree as ET
 import zipfile
 from difflib import SequenceMatcher
 import os
@@ -402,24 +404,149 @@ def decode_text(raw: bytes):
     return raw.decode("utf-8", errors="replace"), "utf-8"
 
 
+IMG_EXT = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tif", ".tiff"}
+_local = lambda t: t.rsplit("}", 1)[-1]  # noqa: E731
+
+
+def media_of(raw: bytes) -> dict:
+    """Картинки внутри docx/vsdx/pptx/xlsx: {sha8: {name,size}}"""
+    out = {}
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw)) as z:
+            for i in z.infolist():
+                if re.search(r"(^|/)media/[^/]+$", i.filename) and i.file_size < 40_000_000:
+                    out[hashlib.sha256(z.read(i)).hexdigest()[:8]] = {"name": i.filename.rsplit("/", 1)[-1],
+                                                                       "size": i.file_size, "path": i.filename}
+    except Exception:
+        pass
+    return out
+
+
+def docx_text(raw: bytes) -> str:
+    with zipfile.ZipFile(io.BytesIO(raw)) as z:
+        xml = z.read("word/document.xml").decode("utf-8")
+        relmap = {}
+        try:
+            for r in ET.fromstring(z.read("word/_rels/document.xml.rels")):
+                relmap[r.get("Id")] = r.get("Target") or ""
+        except Exception:
+            pass
+
+        def img(rid):
+            t = relmap.get(rid)
+            if not t:
+                return ""
+            path = t[1:] if t.startswith("/") else "word/" + t
+            try:
+                data = z.read(path)
+            except KeyError:
+                return ""
+            return f" [рисунок {hashlib.sha256(data).hexdigest()[:8]}, {len(data) // 1024 or 1} КБ]"
+
+        lines = []
+        for p in re.findall(r"<w:p[ >].*?</w:p>", xml, re.S):
+            q = p.replace("<w:tab/>", "<w:t>\t</w:t>")
+            line = "".join(htmllib.unescape(t) for t in re.findall(r"<w:t(?: [^>]*)?>(.*?)</w:t>", q, re.S))
+            for rid in re.findall(r'r:embed="(rId\d+)"', p) + re.findall(r'<v:imagedata[^>]*r:id="(rId\d+)"', p):
+                line += img(rid)
+            lines.append(line)
+    return "\n".join(lines)
+
+
+def visio_text(raw: bytes) -> str:
+    lines = []
+    with zipfile.ZipFile(io.BytesIO(raw)) as z:
+        pages = sorted([n for n in z.namelist() if re.fullmatch(r"visio/pages/page\d+\.xml", n)],
+                       key=lambda n: int(re.findall(r"\d+", n)[-1]))
+        titles = []
+        try:
+            titles = [pg.get("NameU") or pg.get("Name") for pg in ET.fromstring(z.read("visio/pages/pages.xml"))
+                      if _local(pg.tag) == "Page"]
+        except Exception:
+            pass
+        for k, n in enumerate(pages):
+            if z.getinfo(n).file_size > 20_000_000:
+                continue
+            root = ET.fromstring(z.read(n))
+            lines.append(f"=== Страница: {titles[k] if k < len(titles) and titles[k] else k + 1} ===")
+            for sh in root.iter():
+                tag = _local(sh.tag)
+                if tag == "Shape":
+                    text_ = ""
+                    cells = {}
+                    for c in sh:
+                        ct = _local(c.tag)
+                        if ct == "Text":
+                            text_ = " ".join("".join(c.itertext()).split())
+                        elif ct == "Cell" and c.get("N") in ("PinX", "PinY", "Width", "Height"):
+                            try:
+                                cells[c.get("N")] = round(float(c.get("V")), 2)
+                            except (TypeError, ValueError):
+                                pass
+                    pos = " ".join(f"{k2}={v}" for k2, v in cells.items())
+                    lines.append(f"Фигура #{sh.get('ID')} «{sh.get('NameU') or sh.get('Name') or ''}»: {text_}  [{pos}]")
+                elif tag == "Connect":
+                    lines.append(f"Связь: #{sh.get('FromSheet')}.{sh.get('FromCell')} → #{sh.get('ToSheet')}.{sh.get('ToCell')}")
+    return "\n".join(lines)
+
+
 def extract_text(name: str, raw: bytes):
-    """-> (kind, text|None, encoding). kind: text | docx | binary"""
+    """-> (kind, text|None, encoding). kind: text | docx | visio | image | binary"""
     ext = Path(name).suffix.lower()
+    if ext in IMG_EXT:
+        return "image", None, ""
     if ext in (".docx", ".docm"):
         try:
-            with zipfile.ZipFile(io.BytesIO(raw)) as z:
-                xml = z.read("word/document.xml").decode("utf-8")
-            lines = []
-            for p in re.findall(r"<w:p[ >].*?</w:p>", xml, re.S):
-                p = p.replace("<w:tab/>", "<w:t>\t</w:t>")
-                lines.append("".join(htmllib.unescape(t) for t in re.findall(r"<w:t(?: [^>]*)?>(.*?)</w:t>", p, re.S)))
-            return "docx", "\n".join(lines), "utf-8"
+            return "docx", docx_text(raw), "utf-8"
+        except Exception:
+            return "binary", None, ""
+    if ext in (".vsdx", ".vsdm"):
+        try:
+            return "visio", visio_text(raw), "utf-8"
         except Exception:
             return "binary", None, ""
     if ext in BINARY_EXT or b"\0" in raw[:8192]:
         return "binary", None, ""
     text_, enc = decode_text(raw)
     return "text", text_, enc
+
+
+def _pil_load(raw: bytes):
+    from PIL import Image
+    img = Image.open(io.BytesIO(raw))
+    img.load()
+    if img.mode in ("RGBA", "LA", "P"):
+        img = img.convert("RGBA")
+        bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
+        img = Image.alpha_composite(bg, img)
+    return img.convert("RGB")
+
+
+def pixel_diff(ra: bytes, rb: bytes):
+    from PIL import Image, ImageChops, ImageFilter
+    A, B = _pil_load(ra), _pil_load(rb)
+    resized = A.size != B.size
+    if resized:
+        B = B.resize(A.size)
+    if max(A.size) > 2000:
+        k = 2000 / max(A.size)
+        A, B = A.resize((int(A.size[0] * k), int(A.size[1] * k))), B.resize((int(B.size[0] * k), int(B.size[1] * k)))
+    mask = ImageChops.difference(A, B).convert("L").point(lambda v: 255 if v > 24 else 0)
+    pct = mask.histogram()[255] / (mask.size[0] * mask.size[1]) * 100
+    base = Image.blend(B, Image.new("RGB", B.size, (255, 255, 255)), 0.65)
+    out = Image.composite(Image.new("RGB", B.size, (230, 30, 30)), base, mask.filter(ImageFilter.MaxFilter(5)))
+    buf = io.BytesIO()
+    out.save(buf, "PNG")
+    return pct, buf.getvalue(), resized
+
+
+def image_meta(raw: bytes):
+    try:
+        from PIL import Image
+        w, h = Image.open(io.BytesIO(raw)).size
+        return {"w": w, "h": h, "size": len(raw)}
+    except Exception:
+        return {"w": None, "h": None, "size": len(raw)}
 
 
 def char_segments(x: str, y: str):
@@ -1147,35 +1274,104 @@ def version_text(version_id: str, user: User = Depends(current_user), db: Sessio
     return {"kind": kind, "text": text_, "name": d.name}
 
 
+def ver_doc(db: Session, user: User, version_id: str):
+    v = db.get(Version, version_id)
+    d = db.get(Document, v.document_id) if v else None
+    if not d:
+        raise HTTPException(404, "Версия не найдена")
+    project_access(db, user, d.project_id)
+    return v, d
+
+
 @app.get("/api/diff")
 def diff_versions(a: Optional[str] = None, b: Optional[str] = None, full: bool = False,
                   user: User = Depends(current_user), db: Session = Depends(get_db)):
     docs, raws = [], []
     for vid in (a, b):
         if vid:
-            v = db.get(Version, vid)
-            d = db.get(Document, v.document_id) if v else None
-            if not d:
-                raise HTTPException(404, "Версия не найдена")
-            project_access(db, user, d.project_id)
+            v, d = ver_doc(db, user, vid)
             docs.append(d)
-            raws.append((v, read_version(db, vid)))
+            raws.append(read_version(db, vid))
         else:
-            raws.append((None, b""))
+            raws.append(b"")
     if not docs:
         raise HTTPException(400, "Не указаны версии")
     name = docs[-1].name
-    ka, ta, _ = extract_text(name, raws[0][1]) if a else ("text", "", "")
-    kb, tb, _ = extract_text(name, raws[1][1]) if b else ("text", "", "")
+    if Path(name).suffix.lower() in IMG_EXT:
+        res = {"kind": "image", "a": image_meta(raws[0]) if a else None, "b": image_meta(raws[1]) if b else None,
+               "same": bool(a and b and hashlib.sha256(raws[0]).digest() == hashlib.sha256(raws[1]).digest())}
+        if a and b and not res["same"]:
+            try:
+                pct, _, resized = pixel_diff(raws[0], raws[1])
+                res.update(changed_pct=round(pct, 2), resized=resized)
+            except Exception as e:
+                res["error"] = "Не удалось построить сравнение изображений: " + str(e)[:120]
+        return res
+    ka, ta, _ = extract_text(name, raws[0]) if a else ("text", "", "")
+    kb, tb, _ = extract_text(name, raws[1]) if b else ("text", "", "")
     if "binary" in (ka, kb):
-        sa = hashlib.sha256(raws[0][1]).hexdigest() if a else None
-        sb = hashlib.sha256(raws[1][1]).hexdigest() if b else None
-        return {"kind": "binary", "same": sa == sb, "size_a": len(raws[0][1]), "size_b": len(raws[1][1])}
+        sa = hashlib.sha256(raws[0]).hexdigest() if a else None
+        sb = hashlib.sha256(raws[1]).hexdigest() if b else None
+        return {"kind": "binary", "same": sa == sb, "size_a": len(raws[0]), "size_b": len(raws[1])}
     A, B = (ta or "").splitlines(), (tb or "").splitlines()
     if len(A) + len(B) > 40000:
         return {"kind": "toolarge"}
     rows, stats = diff_rows(A, B, context=10**9 if full else 3)
-    return {"kind": "docx" if "docx" in (ka, kb) else "text", "rows": rows, "stats": stats}
+    kind = next((k for k in (ka, kb) if k in ("docx", "visio")), "text")
+    images = {"added": [], "removed": []}
+    if kind in ("docx", "visio"):
+        ma, mb = (media_of(raws[0]) if a else {}), (media_of(raws[1]) if b else {})
+        images = {"added": [{"h": h, "name": m["name"], "size": m["size"]} for h, m in mb.items() if h not in ma],
+                  "removed": [{"h": h, "name": m["name"], "size": m["size"]} for h, m in ma.items() if h not in mb]}
+    return {"kind": kind, "rows": rows, "stats": stats, "images": images}
+
+
+@app.get("/api/versions/{version_id}/view")
+def view_version(version_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    v, d = ver_doc(db, user, version_id)
+    ext = Path(d.name).suffix.lower()
+    raw = read_version(db, v.id)
+    if ext in (".tif", ".tiff", ".bmp"):
+        try:
+            buf = io.BytesIO()
+            _pil_load(raw).save(buf, "PNG")
+            return Response(buf.getvalue(), media_type="image/png")
+        except Exception:
+            pass
+    return Response(raw, media_type=mimetypes.guess_type(d.name)[0] or "application/octet-stream",
+                    headers={"Content-Disposition": "inline"})
+
+
+@app.get("/api/versions/{version_id}/media/{h}")
+def version_media(version_id: str, h: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    v, d = ver_doc(db, user, version_id)
+    raw = read_version(db, v.id)
+    m = media_of(raw).get(h)
+    if not m:
+        raise HTTPException(404, "Изображение не найдено")
+    with zipfile.ZipFile(io.BytesIO(raw)) as z:
+        data = z.read(m["path"])
+    ext = Path(m["name"]).suffix.lower()
+    if ext in (".emf", ".wmf", ".tif", ".tiff", ".bmp"):
+        try:
+            buf = io.BytesIO()
+            _pil_load(data).save(buf, "PNG")
+            data, m["name"] = buf.getvalue(), "x.png"
+        except Exception:
+            raise HTTPException(415, "Формат изображения не отображается в браузере")
+    return Response(data, media_type=mimetypes.guess_type(m["name"])[0] or "application/octet-stream",
+                    headers={"Content-Disposition": "inline"})
+
+
+@app.get("/api/imgdiff")
+def image_diff(a: str, b: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    ver_doc(db, user, a)
+    ver_doc(db, user, b)
+    try:
+        _, png, _ = pixel_diff(read_version(db, a), read_version(db, b))
+    except Exception:
+        raise HTTPException(415, "Не удалось построить сравнение изображений")
+    return Response(png, media_type="image/png")
 
 
 @app.post("/api/versions/{version_id}/restore")

@@ -35,6 +35,34 @@ function Segs({ s }: { s: any[] }) {
   return <>{(s || []).map((x, i) => (x[1] ? <mark key={i}>{x[0]}</mark> : <span key={i}>{x[0]}</span>))}</>;
 }
 
+function ImgDiff({ d, a, b }: { d: any; a?: string | null; b?: string | null }) {
+  const meta = (m: any) => (m ? `${m.w && m.h ? `${m.w}×${m.h}, ` : ''}${fmtSize(m.size)}` : '');
+  return (
+    <div className="img-diff">
+      <div className="diff-head">
+        {d.same ? <b>Изображения идентичны</b> : d.a && d.b ? (
+          d.changed_pct === 0 ? <b>Файлы различаются, но визуально пиксели совпадают</b>
+          : d.changed_pct !== undefined ? <><b className="del-t">Изменено {d.changed_pct}% пикселей</b>{d.resized && <span> · размеры разные, «стало» приведено к размеру «было»</span>}</> : <b>Изображения различаются</b>
+        ) : d.b ? <b className="add-t">Новое изображение</b> : <b className="del-t">Изображение удалено</b>}
+      </div>
+      {d.error && <div className="notice">{d.error}</div>}
+      <div className="img-trio">
+        {a && <figure><figcaption>Было · {meta(d.a)}</figcaption><img src={`/api/versions/${a}/view`} /></figure>}
+        {b && <figure><figcaption>Стало · {meta(d.b)}</figcaption><img src={`/api/versions/${b}/view`} /></figure>}
+        {a && b && !d.same && d.changed_pct !== undefined && <figure><figcaption>Отличия (красным)</figcaption><img src={`/api/imgdiff?a=${a}&b=${b}`} /></figure>}
+      </div>
+    </div>
+  );
+}
+
+function Thumbs({ items, ver, title, cls }: { items: any[]; ver?: string | null; title: string; cls: string }) {
+  if (!items.length || !ver) return null;
+  return (
+    <div className="thumbs-block"><div className={`thumbs-title ${cls}`}>{title}</div>
+      <div className="thumbs">{items.map(m => <figure key={m.h}><img src={`/api/versions/${ver}/media/${m.h}`} alt={m.name} /><figcaption>{m.name} · {fmtSize(m.size)}</figcaption></figure>)}</div></div>
+  );
+}
+
 function DiffView({ a, b }: { a?: string | null; b?: string | null }) {
   const [d, setD] = useState<any>(null), [err, setErr] = useState(''), [full, setFull] = useState(false);
   useEffect(() => {
@@ -47,31 +75,45 @@ function DiffView({ a, b }: { a?: string | null; b?: string | null }) {
   }, [a, b, full]);
   if (err) return <div className="notice">{err}</div>;
   if (!d) return <div className="muted pad">Загрузка изменений…</div>;
-  if (d.kind === 'binary') return <div className="muted pad">Бинарный файл (PDF, Excel, изображение и т. п.): построчное сравнение недоступно. {d.same ? 'Содержимое идентично.' : `Содержимое различается (${fmtSize(d.size_a)} → ${fmtSize(d.size_b)}).`}</div>;
+  if (d.kind === 'image') return <ImgDiff d={d} a={a} b={b} />;
+  if (d.kind === 'binary') return <div className="muted pad">Для этого типа файла (PDF, Excel, старые .doc/.vsd и т. п.) сравнение содержимого недоступно. {d.same ? 'Файлы идентичны.' : `Файлы различаются (${fmtSize(d.size_a)} → ${fmtSize(d.size_b)}).`}</div>;
   if (d.kind === 'toolarge') return <div className="muted pad">Файл слишком большой для построчного сравнения.</div>;
-  const st = d.stats;
-  if (!st.added_lines && !st.removed_lines) return <div className="muted pad">Текстовое содержимое не отличается.</div>;
+  const st = d.stats, im = d.images || { added: [], removed: [] };
+  const hasImg = im.added.length || im.removed.length;
+  const noText = !st.added_lines && !st.removed_lines;
   return (
-    <div className="diff">
-      <div className="diff-head">
-        <b className="add-t">+{st.added_lines}</b> <b className="del-t">−{st.removed_lines}</b> строк · символов: <b className="add-t">+{st.added_chars}</b> <b className="del-t">−{st.removed_chars}</b>
-        <button className="text-button" onClick={() => setFull(!full)}>{full ? 'Только изменения' : 'Показать весь файл'}</button>
-      </div>
-      {d.kind === 'docx' && <div className="muted pad">Сравнивается текст документа Word по абзацам.</div>}
-      <div className="diff-body">
-        {d.rows.map((r: any, i: number) => {
-          if (r.t === 'skip') return <div className="dl skip" key={i}>⋯ {r.n} неизменённых строк</div>;
-          if (r.t === 'eq') return <div className="dl" key={i}><span className="ln">{r.an}</span><span className="ln">{r.bn}</span><span className="sg"> </span><code><Segs s={r.a} /></code></div>;
-          if (r.t === 'del') return <div className="dl del" key={i}><span className="ln">{r.an}</span><span className="ln" /><span className="sg">−</span><code><Segs s={r.a} /></code></div>;
-          if (r.t === 'add') return <div className="dl add" key={i}><span className="ln" /><span className="ln">{r.bn}</span><span className="sg">+</span><code><Segs s={r.b} /></code></div>;
-          return (
-            <React.Fragment key={i}>
-              <div className="dl del"><span className="ln">{r.an}</span><span className="ln" /><span className="sg">−</span><code><Segs s={r.a} /></code></div>
-              <div className="dl add"><span className="ln" /><span className="ln">{r.bn}</span><span className="sg">+</span><code><Segs s={r.b} /></code></div>
-            </React.Fragment>
-          );
-        })}
-      </div>
+    <div>
+      {hasImg > 0 && (
+        <div className="img-changes">
+          <b>Изображения в файле: {im.removed.length && im.added.length ? 'заменены' : im.added.length ? 'добавлены' : 'удалены'}</b>
+          <Thumbs items={im.removed} ver={a} title="Было" cls="del-t" />
+          <Thumbs items={im.added} ver={b} title="Стало" cls="add-t" />
+        </div>
+      )}
+      {noText ? <div className="muted pad">{hasImg ? 'Текст не изменился — изменились только изображения.' : 'Содержимое не отличается.'}</div> : (
+        <div className="diff">
+          <div className="diff-head">
+            <b className="add-t">+{st.added_lines}</b> <b className="del-t">−{st.removed_lines}</b> строк · символов: <b className="add-t">+{st.added_chars}</b> <b className="del-t">−{st.removed_chars}</b>
+            <button className="text-button" onClick={() => setFull(!full)}>{full ? 'Только изменения' : 'Показать весь файл'}</button>
+          </div>
+          {d.kind === 'docx' && <div className="muted pad">Текст Word сравнивается по абзацам; рисунки отмечены как [рисунок хэш, размер] — замена картинки видна как изменение этой отметки.</div>}
+          {d.kind === 'visio' && <div className="muted pad">Visio: сравниваются фигуры (номер, имя, текст, положение и размер) и связи между ними.</div>}
+          <div className="diff-body">
+            {d.rows.map((r: any, i: number) => {
+              if (r.t === 'skip') return <div className="dl skip" key={i}>⋯ {r.n} неизменённых строк</div>;
+              if (r.t === 'eq') return <div className="dl" key={i}><span className="ln">{r.an}</span><span className="ln">{r.bn}</span><span className="sg"> </span><code><Segs s={r.a} /></code></div>;
+              if (r.t === 'del') return <div className="dl del" key={i}><span className="ln">{r.an}</span><span className="ln" /><span className="sg">−</span><code><Segs s={r.a} /></code></div>;
+              if (r.t === 'add') return <div className="dl add" key={i}><span className="ln" /><span className="ln">{r.bn}</span><span className="sg">+</span><code><Segs s={r.b} /></code></div>;
+              return (
+                <React.Fragment key={i}>
+                  <div className="dl del"><span className="ln">{r.an}</span><span className="ln" /><span className="sg">−</span><code><Segs s={r.a} /></code></div>
+                  <div className="dl add"><span className="ln" /><span className="ln">{r.bn}</span><span className="sg">+</span><code><Segs s={r.b} /></code></div>
+                </React.Fragment>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -208,6 +250,30 @@ function App() {
   useEffect(() => { api('/auth/me').then(setUser).catch(() => {}); }, []);
   useEffect(() => { if (user) { refreshProjects(); if (user.must_change_password) setModal('password'); } }, [user]);
   useEffect(() => { if (folder && branchId) refreshDocs(); }, [folder, branchId]);
+  useEffect(() => {
+    if (modal !== 'upload') return;
+    const onPaste = (e: ClipboardEvent) => {
+      const t = e.target as HTMLInputElement | null;
+      if (t && (t.tagName === 'TEXTAREA' || (t.tagName === 'INPUT' && t.type !== 'file'))) return;
+      const cd = e.clipboardData;
+      if (!cd) return;
+      const dg = new Date().toISOString().replace(/\D/g, '');
+      const stamp = `${dg.slice(0, 8)}_${dg.slice(8, 14)}_${dg.slice(14, 17)}`;
+      const got: File[] = [];
+      Array.from(cd.files).forEach((f, k) => {
+        const generic = !f.name || /^image\.\w+$/i.test(f.name);
+        const ext = (f.type.split('/')[1] || 'png').replace('jpeg', 'jpg').replace('svg+xml', 'svg');
+        got.push(generic ? new File([f], `Снимок_${stamp}${k ? '_' + k : ''}.${ext}`, { type: f.type }) : f);
+      });
+      if (!got.length) {
+        const tx = cd.getData('text/plain');
+        if (tx) got.push(new File([tx], `Текст_${stamp}.txt`, { type: 'text/plain' }));
+      }
+      if (got.length) { e.preventDefault(); setFiles(prev => [...prev, ...got]); }
+    };
+    document.addEventListener('paste', onPaste);
+    return () => document.removeEventListener('paste', onPaste);
+  }, [modal]);
 
   const refreshProjects = () => api('/projects').then(setProjects).catch(fail);
   const refreshTree = async (pid = project?.id) => setFolders(await api(`/projects/${pid}/tree`));
@@ -514,11 +580,21 @@ function App() {
 
       {modal === 'upload' && <Modal title="Загрузить файлы" onClose={close}>
         <p>Ветка «{branch?.name}». Если файл с таким именем уже есть в папке, он обновится новой версией, а не добавится копией.</p>
-        <label className="dropzone"><Upload /><b>{files.length ? files.map(f => f.name).join(', ') : 'Выберите файлы с компьютера'}</b>
-          <input type="file" multiple onChange={e => setFiles(Array.from(e.target.files || []))} /></label>
+        <label className="dropzone" onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); setFiles(prev => [...prev, ...Array.from(e.dataTransfer.files)]); }}>
+          <Upload /><b>Выберите файлы, перетащите их сюда или вставьте из буфера (Ctrl+V)</b>
+          <small>Скриншот, скопированный файл или текст — просто нажмите Ctrl+V в этом окне</small>
+          <input type="file" multiple onChange={e => { setFiles(prev => [...prev, ...Array.from(e.target.files || [])]); e.target.value = ''; }} /></label>
+        {files.map((f, i) => (
+          <div className="file-row" key={i}>
+            {f.type.startsWith('image/') ? <img src={URL.createObjectURL(f)} className="file-thumb" /> : <FileText size={18} />}
+            <input value={f.name} onChange={e => setFiles(files.map((x, k) => (k === i ? new File([x], e.target.value, { type: x.type }) : x)))} />
+            <small>{fmtSize(f.size)}</small>
+            <button className="icon-btn danger" title="Убрать" onClick={() => setFiles(files.filter((_, k) => k !== i))}><Trash2 size={14} /></button>
+          </div>
+        ))}
         {files.filter(f => existingNames.has(f.name)).length > 0 && <div className="notice info">Будут обновлены существующие файлы: {files.filter(f => existingNames.has(f.name)).map(f => f.name).join(', ')}</div>}
         <label>Комментарий к версии<input value={comment} onChange={e => setComment(e.target.value)} placeholder="Что изменилось" /></label>
-        <div className="modal-actions"><button className="secondary" onClick={close}>Отмена</button><button className="primary" disabled={!files.length || loading} onClick={upload}>{loading ? 'Загрузка…' : 'Загрузить'}</button></div></Modal>}
+        <div className="modal-actions"><button className="secondary" onClick={close}>Отмена</button><button className="primary" disabled={!files.length || loading} onClick={upload}>{loading ? 'Загрузка…' : `Загрузить${files.length ? ` (${files.length})` : ''}`}</button></div></Modal>}
 
       {modal === 'doc' && doc && <Modal title={doc.name} onClose={close} wide>
         <p className="muted">{doc.folder} · ветка «{doc.branch}»</p>
@@ -535,7 +611,7 @@ function App() {
               {!v.is_head && <button className="text-button" onClick={() => restore(v)}>Восстановить</button>}
             </div></div>))}</div>
         {preview && <div className="preview"><div className="diff-head"><b>Версия {preview.v.version_number}</b><button className="text-button" onClick={() => setPreview(null)}>Закрыть</button></div>
-          {preview.text === null ? <div className="muted pad">Просмотр этого типа файла недоступен — скачайте файл.</div> : <pre>{preview.text}</pre>}</div>}
+          {preview.kind === 'image' ? <img className="pv-img" src={`/api/versions/${preview.v.id}/view`} /> : preview.text === null ? <div className="muted pad">Просмотр этого типа файла недоступен — скачайте файл.</div> : <pre>{preview.text}</pre>}</div>}
         {cmp && <div className="preview"><div className="diff-head"><b>{cmp.title}</b><button className="text-button" onClick={() => setCmp(null)}>Закрыть</button></div><DiffView a={cmp.a} b={cmp.b} /></div>}
         <div className="modal-actions"><button className="secondary danger-btn" onClick={() => deleteDoc(doc)}><Trash2 size={15} /> Удалить из ветки</button><button className="secondary" onClick={close}>Закрыть</button></div></Modal>}
 
