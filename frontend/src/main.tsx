@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Folder, FileText, Search, Plus, Upload, Clock3, GitBranch, ShieldCheck, LogOut, ChevronRight, HardDrive, Users, Trash2, Download, Eye, Pencil } from 'lucide-react';
 import './style.css';
@@ -35,22 +35,248 @@ function Segs({ s }: { s: any[] }) {
   return <>{(s || []).map((x, i) => (x[1] ? <mark key={i}>{x[0]}</mark> : <span key={i}>{x[0]}</span>))}</>;
 }
 
-function ImgDiff({ d, a, b }: { d: any; a?: string | null; b?: string | null }) {
+const stampNow = () => { const dg = new Date().toISOString().replace(/\D/g, ''); return `${dg.slice(0, 8)}_${dg.slice(8, 14)}_${dg.slice(14, 17)}`; };
+
+function pastedFiles(cd: DataTransfer | null): File[] {
+  if (!cd) return [];
+  const got: File[] = [];
+  Array.from(cd.files).forEach((f, k) => {
+    const generic = !f.name || /^image\.\w+$/i.test(f.name);
+    const ext = (f.type.split('/')[1] || 'png').replace('jpeg', 'jpg').replace('svg+xml', 'svg');
+    got.push(generic ? new File([f], `Снимок_${stampNow()}${k ? '_' + k : ''}.${ext}`, { type: f.type }) : f);
+  });
+  if (!got.length) {
+    const tx = cd.getData('text/plain');
+    if (tx) got.push(new File([tx], `Текст_${stampNow()}.txt`, { type: 'text/plain' }));
+  }
+  return got;
+}
+
+// Файлы и папки из перетаскивания. ВАЖНО: DataTransfer читается синхронно, до первого await.
+async function droppedFiles(dt: DataTransfer): Promise<File[]> {
+  const plain = Array.from(dt.files);
+  const entries = Array.from(dt.items || []).map((i: any) => i.webkitGetAsEntry?.()).filter(Boolean);
+  if (!entries.length || !entries.some((e: any) => e.isDirectory)) return plain;
+  const walk = (en: any, path: string): Promise<File[]> => new Promise(res => {
+    if (en.isFile) en.file((f: File) => { (f as any).relPath = path + f.name; res([f]); }, () => res([]));
+    else {
+      const rd = en.createReader(); const all: any[] = [];
+      const next = () => rd.readEntries(async (b: any[]) => {
+        if (!b.length) res((await Promise.all(all.map(x => walk(x, path + en.name + '/')))).flat());
+        else { all.push(...b); next(); }
+      }, () => res([]));
+      next();
+    }
+  });
+  return (await Promise.all(entries.map((e: any) => walk(e, '')))).flat();
+}
+
+function Thumb({ f }: { f: File }) {
+  const [u, setU] = useState('');
+  useEffect(() => {
+    if (!f.type.startsWith('image/')) { setU(''); return; }
+    const x = URL.createObjectURL(f); setU(x);
+    return () => URL.revokeObjectURL(x);
+  }, [f]);
+  return u ? <img src={u} className="file-thumb" /> : <FileText size={18} />;
+}
+
+function FileAdder({ files, setFiles, single }: { files: File[]; setFiles: React.Dispatch<React.SetStateAction<File[]>>; single?: boolean }) {
+  const [over, setOver] = useState(false), [hint, setHint] = useState('');
+  const add = (fs: File[]) => { if (fs.length) setFiles(prev => (single ? [fs[0]] : [...prev, ...fs])); };
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const t = e.target as HTMLInputElement | null;
+      if (t && (t.tagName === 'TEXTAREA' || (t.tagName === 'INPUT' && t.type !== 'file'))) return;
+      const got = pastedFiles(e.clipboardData);
+      if (got.length) { e.preventDefault(); add(got); }
+    };
+    document.addEventListener('paste', onPaste);
+    return () => document.removeEventListener('paste', onPaste);
+  }, [single]);
+  const picked = (e: React.ChangeEvent<HTMLInputElement>, folder?: boolean) => {
+    const list = Array.from(e.target.files || []);   // копируем ДО очистки input
+    e.target.value = '';
+    if (folder) list.forEach(f => { (f as any).relPath = (f as any).webkitRelativePath || undefined; });
+    add(list);
+  };
+  const pasteBtn = async () => {
+    try {
+      const items = await (navigator as any).clipboard.read(); const got: File[] = [];
+      for (const it of items) for (const t of it.types) if (t.startsWith('image/')) got.push(new File([await it.getType(t)], `Снимок_${stampNow()}.${t.split('/')[1]}`, { type: t }));
+      if (!got.length) { const tx = await (navigator as any).clipboard.readText(); if (tx) got.push(new File([tx], `Текст_${stampNow()}.txt`, { type: 'text/plain' })); }
+      got.length ? (add(got), setHint('')) : setHint('В буфере обмена нет изображения или текста');
+    } catch { setHint('Браузер не даёт читать буфер по этому адресу — просто нажмите Ctrl+V в этом окне'); }
+  };
+  return (
+    <div>
+      <div className={`dz ${over ? 'over' : ''}`} onDragOver={e => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)}
+        onDrop={async e => { e.preventDefault(); setOver(false); add(await droppedFiles(e.dataTransfer)); }}>
+        <Upload />
+        <b>{single ? 'Перетащите файл сюда или вставьте из буфера (Ctrl+V)' : 'Перетащите файлы или папки сюда или вставьте из буфера (Ctrl+V)'}</b>
+        <small>Скриншот, скопированный в проводнике файл или текст — просто нажмите Ctrl+V</small>
+        <div className="add-btns">
+          <label className="secondary file-btn">Выбрать {single ? 'файл' : 'файлы'}<input type="file" hidden multiple={!single} onChange={e => picked(e)} /></label>
+          {!single && <label className="secondary file-btn">Выбрать папку<input type="file" hidden multiple {...({ webkitdirectory: '', directory: '' } as any)} onChange={e => picked(e, true)} /></label>}
+          <button type="button" className="secondary" onClick={pasteBtn}>Вставить из буфера</button>
+        </div>
+        {hint && <small className="hint">{hint}</small>}
+      </div>
+      {files.map((f, i) => (
+        <div className="file-row" key={i}>
+          <Thumb f={f} />
+          <input value={f.name} onChange={e => { const v = e.target.value; setFiles(prev => prev.map((x, k) => (k === i ? Object.assign(new File([x], v, { type: x.type }), { relPath: (x as any).relPath }) : x))); }} />
+          <small>{(f as any).relPath && (f as any).relPath.includes('/') ? (f as any).relPath.split('/').slice(0, -1).join('/') + '/ · ' : ''}{fmtSize(f.size)}</small>
+          <button className="icon-btn danger" title="Убрать" onClick={() => setFiles(prev => prev.filter((_, k) => k !== i))}><Trash2 size={14} /></button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Lightbox({ imgs, start, onClose }: { imgs: { label: string; src: string }[]; start: number; onClose: () => void }) {
+  const [i, setI] = useState(start), [tf, setTf] = useState({ s: 1, x: 0, y: 0 });
+  const ref = useRef<HTMLDivElement>(null), drag = useRef<any>(null);
+  useEffect(() => {
+    const el = ref.current!;
+    const wheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const r = el.getBoundingClientRect(), cx = e.clientX - r.left - r.width / 2, cy = e.clientY - r.top - r.height / 2, k = e.deltaY < 0 ? 1.25 : 0.8;
+      setTf(t => { const s = Math.min(40, Math.max(0.2, t.s * k)), f = s / t.s; return { s, x: cx - (cx - t.x) * f, y: cy - (cy - t.y) * f }; });
+    };
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+      if (e.key === 'ArrowRight') setI(x => (x + 1) % imgs.length);
+      if (e.key === 'ArrowLeft') setI(x => (x + imgs.length - 1) % imgs.length);
+    };
+    el.addEventListener('wheel', wheel, { passive: false });
+    window.addEventListener('keydown', key);
+    return () => { el.removeEventListener('wheel', wheel); window.removeEventListener('keydown', key); };
+  }, []);
+  return (
+    <div className="lightbox">
+      <div className="lb-bar">
+        {imgs.map((m, k) => <button key={k} className={k === i ? 'tab active' : 'tab'} onClick={() => setI(k)}>{m.label}</button>)}
+        <span className="muted">Колесо — масштаб, перетаскивание — сдвиг, ←/→ — переключить</span>
+        <button className="secondary" onClick={() => setTf({ s: 1, x: 0, y: 0 })}>Сбросить</button>
+        <button className="secondary" onClick={() => setTf(t => ({ ...t, s: Math.min(40, t.s * 1.5) }))}>＋</button>
+        <button className="secondary" onClick={() => setTf(t => ({ ...t, s: Math.max(0.2, t.s / 1.5) }))}>－</button>
+        <button className="primary" onClick={onClose}>Закрыть</button>
+      </div>
+      <div className="lb-stage" ref={ref}
+        onPointerDown={e => { drag.current = { x: e.clientX, y: e.clientY }; e.currentTarget.setPointerCapture(e.pointerId); }}
+        onPointerMove={e => { if (!drag.current) return; const dx = e.clientX - drag.current.x, dy = e.clientY - drag.current.y; drag.current = { x: e.clientX, y: e.clientY }; setTf(t => ({ ...t, x: t.x + dx, y: t.y + dy })); }}
+        onPointerUp={() => { drag.current = null; }}
+        onDoubleClick={() => setTf(t => (t.s === 1 ? { s: 3, x: 0, y: 0 } : { s: 1, x: 0, y: 0 }))}>
+        <img src={imgs[i].src} draggable={false} style={{ transform: `translate(${tf.x}px,${tf.y}px) scale(${tf.s})` }} />
+      </div>
+    </div>
+  );
+}
+
+const VCOL: any = { removed: '#d23b3b', added: '#1f8a52', changed: '#e08a00' };
+const VLAB: any = { removed: 'Удалена', added: 'Добавлена', changed: 'Изменена' };
+const bboxOf = (items: any[]) => {
+  let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+  const add = (x: number, y: number) => { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); };
+  items.forEach(it => { if (it.t === 'p') it.pts.forEach((q: number[]) => add(q[0], q[1])); else if (it.t === 'x') add(it.x, it.y); else { add(it.x, it.y); add(it.x + it.w, it.y + it.h); } });
+  return x0 > x1 ? null : [x0, y0, x1, y1];
+};
+const fitView = (bb: number[] | null) => {
+  if (!bb) return { x: 0, y: -10, w: 10, h: 10 };
+  const w = Math.max(bb[2] - bb[0], 0.4), h = Math.max(bb[3] - bb[1], 0.4), m = Math.max(w, h) * 0.08;
+  return { x: bb[0] - m, y: -bb[3] - m, w: w + 2 * m, h: h + 2 * m };
+};
+
+function SvgPanel({ title, items, marks, view, setView, ver }: any) {
+  const ref = useRef<SVGSVGElement>(null), drag = useRef<any>(null);
+  const geo = (v: any) => { const r = ref.current!.getBoundingClientRect(), sc = Math.min(r.width / v.w, r.height / v.h); return { r, sc, ox: (r.width - v.w * sc) / 2, oy: (r.height - v.h * sc) / 2 }; };
+  useEffect(() => {
+    const el = ref.current!;
+    const wheel = (e: WheelEvent) => {
+      e.preventDefault();
+      setView((v: any) => {
+        const g = geo(v), ux = v.x + (e.clientX - g.r.left - g.ox) / g.sc, uy = v.y + (e.clientY - g.r.top - g.oy) / g.sc, k = e.deltaY < 0 ? 0.8 : 1.25;
+        return { x: ux - (ux - v.x) * k, y: uy - (uy - v.y) * k, w: v.w * k, h: v.h * k };
+      });
+    };
+    el.addEventListener('wheel', wheel, { passive: false });
+    return () => el.removeEventListener('wheel', wheel);
+  }, []);
+  const rects = useMemo(() => Object.keys(marks || {}).map(id => ({ id, st: marks[id], bb: bboxOf(items.filter((it: any) => it.id === id)) })).filter(r => r.bb), [items, marks]);
+  return (
+    <div className="vz-panel">
+      <div className="vz-title">{title}</div>
+      <svg ref={ref} viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`}
+        onPointerDown={e => { drag.current = { x: e.clientX, y: e.clientY }; e.currentTarget.setPointerCapture(e.pointerId); }}
+        onPointerMove={e => { if (!drag.current) return; const dx = e.clientX - drag.current.x, dy = e.clientY - drag.current.y; drag.current = { x: e.clientX, y: e.clientY }; setView((v: any) => { const g = geo(v); return { ...v, x: v.x - dx / g.sc, y: v.y - dy / g.sc }; }); }}
+        onPointerUp={() => { drag.current = null; }}>
+        {items.map((it: any, i: number) => it.t === 'p'
+          ? (it.cl ? <polygon key={i} points={it.pts.map((q: number[]) => `${q[0]},${-q[1]}`).join(' ')} fill={it.fill} stroke={it.stroke} strokeWidth={1.2} vectorEffect="non-scaling-stroke" />
+            : <polyline key={i} points={it.pts.map((q: number[]) => `${q[0]},${-q[1]}`).join(' ')} fill="none" stroke={it.stroke} strokeWidth={1.2} vectorEffect="non-scaling-stroke" />)
+          : it.t === 'x' ? <text key={i} x={it.x} y={-it.y} fontSize={it.fs} textAnchor="middle" dominantBaseline="middle" style={{ pointerEvents: 'none' }}>{it.s}</text>
+          : <image key={i} href={`/api/versions/${ver}/media/${it.h8}`} x={it.x} y={-(it.y + it.h)} width={it.w} height={it.h} preserveAspectRatio="none" />)}
+        {rects.map(r => { const bb = r.bb as number[], pd = 0.06; return <rect key={r.id} x={bb[0] - pd} y={-bb[3] - pd} width={bb[2] - bb[0] + 2 * pd} height={bb[3] - bb[1] + 2 * pd} fill="none" stroke={VCOL[r.st]} strokeWidth={2.5} strokeDasharray="7 4" vectorEffect="non-scaling-stroke" />; })}
+      </svg>
+    </div>
+  );
+}
+
+function VisioDiff({ d, a, b, single }: { d: any; a?: string | null; b?: string | null; single?: boolean }) {
+  const [pi, setPi] = useState(0), [full, setFull] = useState(false), [view, setView] = useState<any>(null);
+  const pg = d.pages[pi] || d.pages[0];
+  useEffect(() => { if (pg) setView(fitView(bboxOf([...pg.a, ...pg.b]))); }, [pi, d]);
+  if (!pg || !view) return <div className="muted pad">Нет страниц для отображения</div>;
+  const marksA: any = {}, marksB: any = {};
+  pg.changes.forEach((c: any) => { if (c.status !== 'added') marksA[c.id] = c.status; if (c.status !== 'removed') marksB[c.id] = c.status; });
+  const zoom = (k: number) => setView((v: any) => ({ x: v.x + v.w * (1 - k) / 2, y: v.y + v.h * (1 - k) / 2, w: v.w * k, h: v.h * k }));
+  const focus = (id: string) => setView(fitView(bboxOf([...pg.a, ...pg.b].filter((it: any) => it.id === id))));
+  return (
+    <div className={full ? 'vz vz-full' : 'vz'}>
+      <div className="diff-head">
+        {!single && <>{pg.changes.length ? <b>Изменённых фигур: {pg.changes.length}</b> : <b>Различий в фигурах нет</b>}
+          {Object.keys(VCOL).map(k => <span key={k} className="vz-leg"><i style={{ borderColor: VCOL[k] }} />{VLAB[k]}</span>)}</>}
+        {d.pages.length > 1 && <select value={pi} onChange={e => setPi(+e.target.value)}>{d.pages.map((p: any, k: number) => <option key={k} value={k}>{p.name}</option>)}</select>}
+        <span className="vz-tools">
+          <button className="secondary" onClick={() => zoom(0.6)}>＋</button><button className="secondary" onClick={() => zoom(1.6)}>－</button>
+          <button className="secondary" onClick={() => setView(fitView(bboxOf([...pg.a, ...pg.b])))}>По размеру</button>
+          <button className="secondary" onClick={() => setFull(!full)}>{full ? 'Свернуть' : 'На весь экран'}</button>
+        </span>
+      </div>
+      <div className="vz-grid">
+        {!single && <SvgPanel title="Было" items={pg.a} marks={marksA} view={view} setView={setView} ver={a} />}
+        <SvgPanel title={single ? 'Просмотр' : 'Стало'} items={pg.b} marks={marksB} view={view} setView={setView} ver={b} />
+      </div>
+      <div className="muted pad">Колесо мыши — масштаб, перетаскивание — сдвиг. Обе схемы двигаются синхронно. Упрощённая отрисовка: сложные формы и стили Visio могут выглядеть иначе, но изменения подсвечиваются.</div>
+      {!single && pg.changes.length > 0 && <div className="vz-changes">{pg.changes.map((c: any) => (
+        <button key={c.id} className="vz-chip" style={{ borderColor: VCOL[c.status] }} onClick={() => focus(c.id)} title="Показать крупно">
+          <b style={{ color: VCOL[c.status] }}>{VLAB[c.status]}</b> #{c.id} {c.name} {c.text && `«${c.text.slice(0, 40)}»`}</button>))}</div>}
+    </div>
+  );
+}
+
+function ImgDiff({ d, a, b, t, setT }: { d: any; a?: string | null; b?: string | null; t: number; setT: (n: number) => void }) {
+  const [lb, setLb] = useState<number | null>(null);
   const meta = (m: any) => (m ? `${m.w && m.h ? `${m.w}×${m.h}, ` : ''}${fmtSize(m.size)}` : '');
+  const list: { label: string; src: string }[] = [];
+  if (a) list.push({ label: 'Было', src: `/api/versions/${a}/view` });
+  if (b) list.push({ label: 'Стало', src: `/api/versions/${b}/view` });
+  if (a && b && !d.same && d.changed_pct !== undefined) list.push({ label: 'Отличия', src: `/api/imgdiff?a=${a}&b=${b}&t=${t}` });
+  const caps = ['Было · ' + meta(d.a), 'Стало · ' + meta(d.b), 'Отличия (красным)'];
   return (
     <div className="img-diff">
       <div className="diff-head">
         {d.same ? <b>Изображения идентичны</b> : d.a && d.b ? (
-          d.changed_pct === 0 ? <b>Файлы различаются, но визуально пиксели совпадают</b>
-          : d.changed_pct !== undefined ? <><b className="del-t">Изменено {d.changed_pct}% пикселей</b>{d.resized && <span> · размеры разные, «стало» приведено к размеру «было»</span>}</> : <b>Изображения различаются</b>
+          d.changed_pct === 0 ? <b>Значимых отличий нет (различается только качество сжатия или мелкий шум)</b>
+          : d.changed_pct !== undefined ? <><b className="del-t">Изменено ≈{d.changed_pct}% площади</b>{d.resized && <span> · размеры разные, «стало» приведено к размеру «было»</span>}</> : <b>Изображения различаются</b>
         ) : d.b ? <b className="add-t">Новое изображение</b> : <b className="del-t">Изображение удалено</b>}
+        {d.a && d.b && !d.same && <span className="vz-tools">Чувствительность: <select value={t} onChange={e => setT(+e.target.value)}><option value={90}>Низкая (игнорировать шум и сжатие)</option><option value={48}>Средняя</option><option value={24}>Высокая (любые отличия)</option></select></span>}
       </div>
       {d.error && <div className="notice">{d.error}</div>}
       <div className="img-trio">
-        {a && <figure><figcaption>Было · {meta(d.a)}</figcaption><img src={`/api/versions/${a}/view`} /></figure>}
-        {b && <figure><figcaption>Стало · {meta(d.b)}</figcaption><img src={`/api/versions/${b}/view`} /></figure>}
-        {a && b && !d.same && d.changed_pct !== undefined && <figure><figcaption>Отличия (красным)</figcaption><img src={`/api/imgdiff?a=${a}&b=${b}`} /></figure>}
+        {list.map((m, k) => <figure key={k}><figcaption>{m.label === 'Было' ? caps[0] : m.label === 'Стало' ? caps[1] : caps[2]}</figcaption><img src={m.src} className="zoomable" title="Нажмите, чтобы увеличить" onClick={() => setLb(k)} /></figure>)}
       </div>
+      {lb !== null && <Lightbox imgs={list} start={lb} onClose={() => setLb(null)} />}
     </div>
   );
 }
@@ -64,18 +290,20 @@ function Thumbs({ items, ver, title, cls }: { items: any[]; ver?: string | null;
 }
 
 function DiffView({ a, b }: { a?: string | null; b?: string | null }) {
-  const [d, setD] = useState<any>(null), [err, setErr] = useState(''), [full, setFull] = useState(false);
+  const [d, setD] = useState<any>(null), [err, setErr] = useState(''), [full, setFull] = useState(false), [t, setT] = useState(48);
   useEffect(() => {
-    setD(null); setErr('');
+    setErr('');
     const q = new URLSearchParams();
     if (a) q.set('a', a);
     if (b) q.set('b', b);
     if (full) q.set('full', 'true');
+    q.set('t', String(t));
     api('/diff?' + q.toString()).then(setD).catch(e => setErr(e.message));
-  }, [a, b, full]);
+  }, [a, b, full, t]);
   if (err) return <div className="notice">{err}</div>;
   if (!d) return <div className="muted pad">Загрузка изменений…</div>;
-  if (d.kind === 'image') return <ImgDiff d={d} a={a} b={b} />;
+  if (d.kind === 'image') return <ImgDiff d={d} a={a} b={b} t={t} setT={setT} />;
+  if (d.kind === 'visio' && d.pages) return <VisioDiff d={d} a={a} b={b} />;
   if (d.kind === 'binary') return <div className="muted pad">Для этого типа файла (PDF, Excel, старые .doc/.vsd и т. п.) сравнение содержимого недоступно. {d.same ? 'Файлы идентичны.' : `Файлы различаются (${fmtSize(d.size_a)} → ${fmtSize(d.size_b)}).`}</div>;
   if (d.kind === 'toolarge') return <div className="muted pad">Файл слишком большой для построчного сравнения.</div>;
   const st = d.stats, im = d.images || { added: [], removed: [] };
@@ -238,7 +466,7 @@ function App() {
   const [newName, setNewName] = useState(''), [tplId, setTplId] = useState(''), [templates, setTemplates] = useState<any[]>([]);
   const [files, setFiles] = useState<File[]>([]), [comment, setComment] = useState(''), [loading, setLoading] = useState(false);
   const [doc, setDoc] = useState<any>(null), [preview, setPreview] = useState<any>(null), [cmp, setCmp] = useState<any>(null);
-  const [mergeSrc, setMergeSrc] = useState<any>(null);
+  const [mergeSrc, setMergeSrc] = useState<any>(null), [vfiles, setVfiles] = useState<File[]>([]);
   const [users, setUsers] = useState<any[]>([]), [editUser, setEditUser] = useState<any>(null), [uf, setUf] = useState<any>({ role: 'member' });
   const [members, setMembers] = useState<any[]>([]), [directory, setDirectory] = useState<any[]>([]), [mf, setMf] = useState<any>({ role: 'member' });
   const [pw, setPw] = useState<any>({ cur: '', n1: '', n2: '' });
@@ -250,30 +478,18 @@ function App() {
   useEffect(() => { api('/auth/me').then(setUser).catch(() => {}); }, []);
   useEffect(() => { if (user) { refreshProjects(); if (user.must_change_password) setModal('password'); } }, [user]);
   useEffect(() => { if (folder && branchId) refreshDocs(); }, [folder, branchId]);
-  useEffect(() => {
-    if (modal !== 'upload') return;
+  useEffect(() => {   // вставка из буфера на странице файлов (без открытого окна) — открывает окно загрузки
+    if (modal || view !== 'project' || tab !== 'files' || !folder) return;
     const onPaste = (e: ClipboardEvent) => {
       const t = e.target as HTMLInputElement | null;
-      if (t && (t.tagName === 'TEXTAREA' || (t.tagName === 'INPUT' && t.type !== 'file'))) return;
-      const cd = e.clipboardData;
-      if (!cd) return;
-      const dg = new Date().toISOString().replace(/\D/g, '');
-      const stamp = `${dg.slice(0, 8)}_${dg.slice(8, 14)}_${dg.slice(14, 17)}`;
-      const got: File[] = [];
-      Array.from(cd.files).forEach((f, k) => {
-        const generic = !f.name || /^image\.\w+$/i.test(f.name);
-        const ext = (f.type.split('/')[1] || 'png').replace('jpeg', 'jpg').replace('svg+xml', 'svg');
-        got.push(generic ? new File([f], `Снимок_${stamp}${k ? '_' + k : ''}.${ext}`, { type: f.type }) : f);
-      });
-      if (!got.length) {
-        const tx = cd.getData('text/plain');
-        if (tx) got.push(new File([tx], `Текст_${stamp}.txt`, { type: 'text/plain' }));
-      }
-      if (got.length) { e.preventDefault(); setFiles(prev => [...prev, ...got]); }
+      if (t && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT')) return;
+      const got = pastedFiles(e.clipboardData);
+      if (got.length) { e.preventDefault(); setFiles(got); setModal('upload'); }
     };
     document.addEventListener('paste', onPaste);
     return () => document.removeEventListener('paste', onPaste);
-  }, [modal]);
+  }, [modal, view, tab, folder]);
+  useEffect(() => { if (!notice) return; const t = setTimeout(() => setNotice(''), 9000); return () => clearTimeout(t); }, [notice]);
 
   const refreshProjects = () => api('/projects').then(setProjects).catch(fail);
   const refreshTree = async (pid = project?.id) => setFolders(await api(`/projects/${pid}/tree`));
@@ -326,16 +542,32 @@ function App() {
     return false;
   };
   const upload = () => run(async () => {
-    const msgs: string[] = [];
+    const msgs: string[] = [], cache = new Map<string, string>();
+    let known = folders;
+    const ensure = async (parts: string[]) => {   // создаёт вложенные папки для загружаемой папки
+      let parent: string = folder.id;
+      for (const part of parts) {
+        const key = parent + '/' + part;
+        if (!cache.has(key)) {
+          let ex = known.find(f => f.parent_id === parent && f.name === part);
+          if (!ex) { const r = await post(`/projects/${project.id}/folders`, { name: part, parent_id: parent }); ex = { id: r.id, parent_id: parent, name: part }; known = [...known, ex]; }
+          cache.set(key, ex.id);
+        }
+        parent = cache.get(key)!;
+      }
+      return parent;
+    };
     for (const f of files) {
+      const parts = (((f as any).relPath as string) || '').split('/').slice(0, -1).filter(Boolean);
+      const target = parts.length ? await ensure(parts) : folder.id;
       const fd = new FormData(); fd.append('file', f); fd.append('comment', comment);
-      const r = await api(`/folders/${folder.id}/documents?branch_id=${branchId}`, { method: 'POST', body: fd });
+      const r = await api(`/folders/${target}/documents?branch_id=${branchId}`, { method: 'POST', body: fd });
       msgs.push(r.unchanged ? `«${f.name}»: без изменений` : r.updated ? `«${f.name}»: обновлён до v${r.version_number}` : `«${f.name}»: загружен`);
     }
-    close(); await refreshDocs(); setNotice(msgs.join('; '));
+    close(); await refreshTree(); await refreshDocs(); setNotice(msgs.length > 6 ? `Обработано файлов: ${msgs.length}` : msgs.join('; '));
   });
   const openDoc = async (d: any) => {
-    try { setPreview(null); setCmp(null); setDoc(await api(`/documents/${d.id}?branch_id=${branchId}`)); setModal('doc'); } catch (e) { fail(e); }
+    try { setPreview(null); setCmp(null); setVfiles([]); setDoc(await api(`/documents/${d.id}?branch_id=${branchId}`)); setModal('doc'); } catch (e) { fail(e); }
   };
   const reloadDoc = async () => { setDoc(await api(`/documents/${doc.id}?branch_id=${branchId}`)); await refreshDocs(); };
   const deleteDoc = (d: any) => {
@@ -347,7 +579,7 @@ function App() {
     run(async () => {
       const fd = new FormData(); fd.append('file', f); fd.append('comment', comment);
       const r = await api(`/documents/${doc.id}/versions?branch_id=${branchId}`, { method: 'POST', body: fd });
-      setComment(''); await reloadDoc(); setNotice(r.unchanged ? r.message : `Создана версия ${r.version_number}`);
+      setComment(''); setVfiles([]); await reloadDoc(); setNotice(r.unchanged ? r.message : `Создана версия ${r.version_number}`);
     });
   };
   const restore = (v: any) => {
@@ -460,7 +692,6 @@ function App() {
           </div>
           <div className="top-actions"><div className="searchbox"><Search size={16} /><input placeholder="Поиск в текущем списке..." value={search} onChange={e => setSearch(e.target.value)} /></div></div>
         </header>
-        {notice && <div className="toast" onClick={() => setNotice('')}>{notice}<button>×</button></div>}
 
         {view === 'home' && (
           <section className="content">
@@ -529,7 +760,7 @@ function App() {
                   {tree(null)}
                   {!folders.length && <p className="muted pad">Нет папок</p>}
                 </aside>
-                <div className="files-panel">
+                <div className="files-panel" onDragOver={e => { if (folder) e.preventDefault(); }} onDrop={async e => { if (!folder) return; e.preventDefault(); const got = await droppedFiles(e.dataTransfer); if (got.length) { setFiles(got); setModal('upload'); } }}>
                   <div className="files-heading"><div><h2>{folder?.name || 'Выберите папку'}</h2><p>{folder ? `Ветка «${branch?.name}»` : 'Выберите папку слева для просмотра содержимого'}</p></div>
                     {folder && <button className="primary" onClick={() => setModal('upload')}><Upload size={16} />Загрузить файл</button>}</div>
                   {folder && <div className="table-wrap"><table><thead><tr><th>Название</th><th>Версия</th><th>Автор</th><th>Изменён</th><th /></tr></thead><tbody>
@@ -579,27 +810,17 @@ function App() {
         <div className="modal-actions"><button className="secondary" onClick={close}>Отмена</button><button className="primary" disabled={!newName.trim() || loading} onClick={createBranch}>Создать ветку</button></div></Modal>}
 
       {modal === 'upload' && <Modal title="Загрузить файлы" onClose={close}>
-        <p>Ветка «{branch?.name}». Если файл с таким именем уже есть в папке, он обновится новой версией, а не добавится копией.</p>
-        <label className="dropzone" onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); setFiles(prev => [...prev, ...Array.from(e.dataTransfer.files)]); }}>
-          <Upload /><b>Выберите файлы, перетащите их сюда или вставьте из буфера (Ctrl+V)</b>
-          <small>Скриншот, скопированный файл или текст — просто нажмите Ctrl+V в этом окне</small>
-          <input type="file" multiple onChange={e => { setFiles(prev => [...prev, ...Array.from(e.target.files || [])]); e.target.value = ''; }} /></label>
-        {files.map((f, i) => (
-          <div className="file-row" key={i}>
-            {f.type.startsWith('image/') ? <img src={URL.createObjectURL(f)} className="file-thumb" /> : <FileText size={18} />}
-            <input value={f.name} onChange={e => setFiles(files.map((x, k) => (k === i ? new File([x], e.target.value, { type: x.type }) : x)))} />
-            <small>{fmtSize(f.size)}</small>
-            <button className="icon-btn danger" title="Убрать" onClick={() => setFiles(files.filter((_, k) => k !== i))}><Trash2 size={14} /></button>
-          </div>
-        ))}
+        <p>Ветка «{branch?.name}». Если файл с таким именем уже есть в папке, он обновится новой версией, а не добавится копией. Папки загружаются вместе с вложенной структурой.</p>
+        <FileAdder files={files} setFiles={setFiles} />
         {files.filter(f => existingNames.has(f.name)).length > 0 && <div className="notice info">Будут обновлены существующие файлы: {files.filter(f => existingNames.has(f.name)).map(f => f.name).join(', ')}</div>}
         <label>Комментарий к версии<input value={comment} onChange={e => setComment(e.target.value)} placeholder="Что изменилось" /></label>
         <div className="modal-actions"><button className="secondary" onClick={close}>Отмена</button><button className="primary" disabled={!files.length || loading} onClick={upload}>{loading ? 'Загрузка…' : `Загрузить${files.length ? ` (${files.length})` : ''}`}</button></div></Modal>}
 
       {modal === 'doc' && doc && <Modal title={doc.name} onClose={close} wide>
         <p className="muted">{doc.folder} · ветка «{doc.branch}»</p>
+        <FileAdder files={vfiles} setFiles={setVfiles} single />
         <div className="doc-new"><input value={comment} onChange={e => setComment(e.target.value)} placeholder="Комментарий к новой версии" />
-          <label className="secondary file-btn"><Upload size={15} /> Загрузить новую версию<input type="file" hidden onChange={e => { newVersion(e.target.files?.[0] || null); e.target.value = ''; }} /></label></div>
+          <button className="primary" disabled={!vfiles.length || loading} onClick={() => newVersion(vfiles[0])}>Загрузить новую версию</button></div>
         <div className="version-list">{doc.versions.map((v: any) => (
           <div className="version-row" key={v.id}>
             <div><b>Версия {v.version_number}</b> {v.is_head && <span className="version-badge cur">текущая</span>}<small>{v.comment || 'Без комментария'} · {v.author} · {v.branch ? `ветка «${v.branch}» · ` : ''}{fmt(v.created_at)} · {fmtSize(v.size_bytes)}</small></div>
@@ -611,7 +832,7 @@ function App() {
               {!v.is_head && <button className="text-button" onClick={() => restore(v)}>Восстановить</button>}
             </div></div>))}</div>
         {preview && <div className="preview"><div className="diff-head"><b>Версия {preview.v.version_number}</b><button className="text-button" onClick={() => setPreview(null)}>Закрыть</button></div>
-          {preview.kind === 'image' ? <img className="pv-img" src={`/api/versions/${preview.v.id}/view`} /> : preview.text === null ? <div className="muted pad">Просмотр этого типа файла недоступен — скачайте файл.</div> : <pre>{preview.text}</pre>}</div>}
+          {preview.kind === 'visio' && preview.pages ? <VisioDiff d={{ pages: preview.pages }} a={null} b={preview.v.id} single /> : preview.kind === 'image' ? <img className="pv-img" src={`/api/versions/${preview.v.id}/view`} /> : preview.text === null ? <div className="muted pad">Просмотр этого типа файла недоступен — скачайте файл.</div> : <pre>{preview.text}</pre>}</div>}
         {cmp && <div className="preview"><div className="diff-head"><b>{cmp.title}</b><button className="text-button" onClick={() => setCmp(null)}>Закрыть</button></div><DiffView a={cmp.a} b={cmp.b} /></div>}
         <div className="modal-actions"><button className="secondary danger-btn" onClick={() => deleteDoc(doc)}><Trash2 size={15} /> Удалить из ветки</button><button className="secondary" onClick={close}>Закрыть</button></div></Modal>}
 
@@ -642,6 +863,7 @@ function App() {
         <label>Новый пароль (не менее 12 символов)<input type="password" value={pw.n1} onChange={e => setPw({ ...pw, n1: e.target.value })} /></label>
         <label>Повторите новый пароль<input type="password" value={pw.n2} onChange={e => setPw({ ...pw, n2: e.target.value })} /></label>
         <div className="modal-actions">{!user.must_change_password && <button className="secondary" onClick={() => setModal('')}>Отмена</button>}<button className="primary" disabled={loading || !pw.cur || pw.n1.length < 12} onClick={changePassword}>Сменить пароль</button></div></Modal>}
+      {notice && <div className="toast" onClick={() => setNotice('')}>{notice}<button>×</button></div>}
     </div>
   );
 }

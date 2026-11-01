@@ -490,6 +490,222 @@ def visio_text(raw: bytes) -> str:
     return "\n".join(lines)
 
 
+def _cells(el):
+    return {c.get("N"): c.get("V") for c in el if _local(c.tag) == "Cell"}
+
+
+def _fl(v, d=0.0):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return d
+
+
+def _vshape(el):
+    sh = {"id": el.get("ID"), "name": el.get("NameU") or el.get("Name") or "", "master": el.get("Master"),
+          "type": el.get("Type"), "cells": _cells(el), "geom": [], "kids": [], "text": "", "fs": 0.14, "img": None}
+    for c in el:
+        t = _local(c.tag)
+        if t == "Text":
+            sh["text"] = " ".join("".join(c.itertext()).split())
+        elif t == "Shapes":
+            sh["kids"] = [_vshape(x) for x in c if _local(x.tag) == "Shape"]
+        elif t == "ForeignData":
+            for r in c:
+                if _local(r.tag) == "Rel":
+                    sh["img"] = next((v for k, v in r.attrib.items() if k.endswith("id")), None)
+        elif t == "Section":
+            n = c.get("N")
+            if n == "Geometry":
+                sh["geom"].append({"cells": _cells(c), "rows": [(r.get("T"), _cells(r)) for r in c
+                                                                if _local(r.tag) == "Row" and r.get("Del") != "1"]})
+            elif n == "Character":
+                for r in c:
+                    if _local(r.tag) == "Row":
+                        sz = _fl(_cells(r).get("Size"), 0)
+                        if sz:
+                            sh["fs"] = sz
+                        break
+    return sh
+
+
+def _vmasters(z):
+    out = {}
+    try:
+        rm = {r.get("Id"): r.get("Target") for r in ET.fromstring(z.read("visio/masters/_rels/masters.xml.rels"))}
+        for m in ET.fromstring(z.read("visio/masters/masters.xml")):
+            if _local(m.tag) != "Master":
+                continue
+            rid = next((v for ch in m if _local(ch.tag) == "Rel" for k, v in ch.attrib.items() if k.endswith("id")), None)
+            if rm.get(rid):
+                root = ET.fromstring(z.read("visio/masters/" + rm[rid]))
+                el = next((e for e in root.iter() if _local(e.tag) == "Shape"), None)
+                if el is not None:
+                    out[m.get("ID")] = _vshape(el)
+    except Exception:
+        pass
+    return out
+
+
+def _mmul(m, n):
+    a, b, c, d, e, f = m
+    A, B, C, D, E, F = n
+    return (a * A + c * B, b * A + d * B, a * C + c * D, b * C + d * D, a * E + c * F + e, b * E + d * F + f)
+
+
+def _mpt(m, x, y):
+    return (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5])
+
+
+def _vlocal(c):
+    import math
+    ang = _fl(c.get("Angle"))
+    ca, sa = math.cos(ang), math.sin(ang)
+    lx, ly = _fl(c.get("LocPinX")), _fl(c.get("LocPinY"))
+    return (ca, sa, -sa, ca, _fl(c.get("PinX")) - ca * lx + sa * ly, _fl(c.get("PinY")) - sa * lx - ca * ly)
+
+
+def _vstyle(*cs):
+    def g(n):
+        return next((c.get(n) for c in cs if c.get(n) is not None), None)
+    fv, fp, lc, lp = g("FillForegnd"), g("FillPattern"), g("LineColor"), g("LinePattern")
+    fill = "none" if fp == "0" else (fv if fv and fv.startswith("#") else "#ffffff")
+    stroke = "none" if lp == "0" else (lc if lc and lc.startswith("#") else "#333333")
+    return fill, stroke
+
+
+def _vgeom(sh, M, out, top, W, H, style):
+    import math
+    for g in sh["geom"]:
+        gc = g["cells"]
+        if gc.get("NoShow") == "1":
+            continue
+        fill = "none" if gc.get("NoFill") == "1" else style[0]
+        stroke = "none" if gc.get("NoLine") == "1" else style[1]
+        cur, polys = [], []
+
+        def flush():
+            if len(cur) > 1:
+                polys.append(list(cur))
+            cur.clear()
+        for T, rc in g["rows"]:
+            x, y = _fl(rc.get("X")), _fl(rc.get("Y"))
+            if T == "MoveTo":
+                flush(); cur.append((x, y))
+            elif T == "RelMoveTo":
+                flush(); cur.append((x * W, y * H))
+            elif T in ("LineTo", "PolylineTo", "ArcTo", "SplineStart", "SplineKnot", "NURBSTo"):
+                cur.append((x, y))
+            elif T == "RelLineTo":
+                cur.append((x * W, y * H))
+            elif T == "EllipticalArcTo" and cur:
+                x0, y0 = cur[-1]
+                ax, ay = _fl(rc.get("A")), _fl(rc.get("B"))
+                for k in range(1, 9):
+                    u = k / 8
+                    cur.append(((1 - u) ** 2 * x0 + 2 * (1 - u) * u * ax + u * u * x, (1 - u) ** 2 * y0 + 2 * (1 - u) * u * ay + u * u * y))
+            elif T == "Ellipse":
+                flush()
+                ux, uy = _fl(rc.get("A")) - x, _fl(rc.get("B")) - y
+                vx, vy = _fl(rc.get("C")) - x, _fl(rc.get("D")) - y
+                pts = [(x + math.cos(th) * ux + math.sin(th) * vx, y + math.cos(th) * uy + math.sin(th) * vy)
+                       for th in [i * math.pi / 20 for i in range(41)]]
+                polys.append(pts)
+        flush()
+        for pl in polys:
+            closed = abs(pl[0][0] - pl[-1][0]) < 1e-6 and abs(pl[0][1] - pl[-1][1]) < 1e-6
+            pts = [[round(v, 3) for v in _mpt(M, px, py)] for px, py in pl]
+            out.append({"id": top, "t": "p", "pts": pts, "cl": closed, "fill": fill if closed else "none", "stroke": stroke})
+
+
+def _vrender(sh, M, masters, top, out, rels, depth=0):
+    c = sh["cells"]
+    W, H = _fl(c.get("Width")), _fl(c.get("Height"))
+    Mi = _mmul(M, _vlocal(c))
+    before = len(out)
+    mroot = masters.get(sh["master"]) if sh["master"] else None
+    if not sh["geom"] and not sh["kids"] and mroot is not None and depth < 5:
+        mw, mh = _fl(mroot["cells"].get("Width")) or W or 1, _fl(mroot["cells"].get("Height")) or H or 1
+        MM = _mmul(Mi, (W / mw if mw else 1, 0, 0, H / mh if mh else 1, 0, 0))
+        _vgeom(mroot, MM, out, top, mw, mh, _vstyle(c, mroot["cells"]))
+        for k in mroot["kids"]:
+            _vrender(k, MM, masters, top, out, rels, depth + 1)
+    else:
+        _vgeom(sh, Mi, out, top, W, H, _vstyle(c))
+        for k in sh["kids"]:
+            _vrender(k, Mi, masters, top, out, rels, depth + 1)
+    if sh["img"] and rels.get(sh["img"]):
+        x0, y0 = _mpt(Mi, 0, 0)
+        x1, y1 = _mpt(Mi, W, H)
+        out.append({"id": top, "t": "i", "x": round(min(x0, x1), 3), "y": round(min(y0, y1), 3),
+                    "w": round(abs(x1 - x0), 3), "h": round(abs(y1 - y0), 3), "h8": rels[sh["img"]]})
+    elif len(out) == before and not sh["kids"] and W > 0 and H > 0 and sh["type"] != "Group" and not sh["img"]:
+        if "BeginX" in c and depth == 0:
+            out.append({"id": top, "t": "p", "pts": [[round(_fl(c["BeginX"]), 3), round(_fl(c["BeginY"]), 3)],
+                                                      [round(_fl(c["EndX"]), 3), round(_fl(c["EndY"]), 3)]],
+                        "cl": False, "fill": "none", "stroke": "#333333"})
+        else:
+            fill, stroke = _vstyle(c)
+            out.append({"id": top, "t": "p", "pts": [[round(v, 3) for v in _mpt(Mi, px, py)] for px, py in ((0, 0), (W, 0), (W, H), (0, H), (0, 0))],
+                        "cl": True, "fill": fill, "stroke": stroke})
+    if sh["text"]:
+        cx, cy = _mpt(Mi, W / 2, H / 2)
+        out.append({"id": top, "t": "x", "x": round(cx, 3), "y": round(cy, 3), "s": sh["text"][:200], "fs": sh["fs"]})
+
+
+def visio_scene(raw: bytes):
+    """-> [{name, items:[...], names:{id:{name,text}}}] — упрощённая векторная отрисовка страниц Visio."""
+    pages = []
+    with zipfile.ZipFile(io.BytesIO(raw)) as z:
+        masters = _vmasters(z)
+        files = sorted([n for n in z.namelist() if re.fullmatch(r"visio/pages/page\d+\.xml", n)],
+                       key=lambda n: int(re.findall(r"\d+", n)[-1]))
+        titles = []
+        try:
+            titles = [pg.get("NameU") or pg.get("Name") for pg in ET.fromstring(z.read("visio/pages/pages.xml")) if _local(pg.tag) == "Page"]
+        except Exception:
+            pass
+        for k, n in enumerate(files):
+            if z.getinfo(n).file_size > 30_000_000:
+                continue
+            rels = {}
+            try:
+                for r in ET.fromstring(z.read(n.replace("pages/", "pages/_rels/") + ".rels")):
+                    tgt = r.get("Target") or ""
+                    path = ("visio/" + tgt.replace("../", "")) if not tgt.startswith("/") else tgt[1:]
+                    rels[r.get("Id")] = hashlib.sha256(z.read(path)).hexdigest()[:8]
+            except Exception:
+                pass
+            root = ET.fromstring(z.read(n))
+            items, names = [], {}
+            top_el = next((e for e in root if _local(e.tag) == "Shapes"), None)
+            for el in (top_el if top_el is not None else []):
+                if _local(el.tag) != "Shape" or len(items) > 60000:
+                    continue
+                sh = _vshape(el)
+                names[sh["id"]] = {"name": sh["name"], "text": sh["text"]}
+                _vrender(sh, (1, 0, 0, 1, 0, 0), masters, sh["id"], items, rels)
+            pages.append({"name": titles[k] if k < len(titles) and titles[k] else f"Страница {k + 1}",
+                          "items": items, "names": names})
+    return pages
+
+
+def scene_changes(A: Optional[dict], B: Optional[dict]):
+    def group(pg):
+        g = {}
+        for it in (pg["items"] if pg else []):
+            g.setdefault(it["id"], []).append(it)
+        return {k: hashlib.sha1(json.dumps(v, sort_keys=True).encode()).hexdigest() for k, v in g.items()}
+    ga, gb = group(A), group(B)
+    names = {**(A["names"] if A else {}), **(B["names"] if B else {})}
+    out = []
+    for k in sorted(set(ga) | set(gb), key=lambda x: int(x) if str(x).isdigit() else 0):
+        st = "added" if k not in ga else "removed" if k not in gb else ("changed" if ga[k] != gb[k] else None)
+        if st:
+            out.append({"id": k, "name": names.get(k, {}).get("name", ""), "text": names.get(k, {}).get("text", ""), "status": st})
+    return out
+
+
 def extract_text(name: str, raw: bytes):
     """-> (kind, text|None, encoding). kind: text | docx | visio | image | binary"""
     ext = Path(name).suffix.lower()
@@ -522,19 +738,24 @@ def _pil_load(raw: bytes):
     return img.convert("RGB")
 
 
-def pixel_diff(ra: bytes, rb: bytes):
+def pixel_diff(ra: bytes, rb: bytes, t: int = 48):
+    """Сравнение картинок, устойчивое к лёгкому ухудшению качества: размытие + порог + удаление мелкого шума."""
     from PIL import Image, ImageChops, ImageFilter
     A, B = _pil_load(ra), _pil_load(rb)
     resized = A.size != B.size
     if resized:
-        B = B.resize(A.size)
+        B = B.resize(A.size, Image.LANCZOS)
     if max(A.size) > 2000:
         k = 2000 / max(A.size)
-        A, B = A.resize((int(A.size[0] * k), int(A.size[1] * k))), B.resize((int(B.size[0] * k), int(B.size[1] * k)))
-    mask = ImageChops.difference(A, B).convert("L").point(lambda v: 255 if v > 24 else 0)
+        A, B = A.resize((int(A.size[0] * k), int(A.size[1] * k)), Image.LANCZOS), B.resize((int(B.size[0] * k), int(B.size[1] * k)), Image.LANCZOS)
+    r = max(1.2, max(A.size) / 500)
+    Ab, Bb = A.filter(ImageFilter.GaussianBlur(r)), B.filter(ImageFilter.GaussianBlur(r))
+    ch = ImageChops.difference(Ab, Bb).split()
+    gray = ImageChops.lighter(ImageChops.lighter(ch[0], ch[1]), ch[2])
+    mask = gray.point(lambda v: 255 if v > t else 0).filter(ImageFilter.MinFilter(3))
     pct = mask.histogram()[255] / (mask.size[0] * mask.size[1]) * 100
     base = Image.blend(B, Image.new("RGB", B.size, (255, 255, 255)), 0.65)
-    out = Image.composite(Image.new("RGB", B.size, (230, 30, 30)), base, mask.filter(ImageFilter.MaxFilter(5)))
+    out = Image.composite(Image.new("RGB", B.size, (230, 30, 30)), base, mask.filter(ImageFilter.MaxFilter(7)))
     buf = io.BytesIO()
     out.save(buf, "PNG")
     return pct, buf.getvalue(), resized
@@ -1056,7 +1277,7 @@ def create_branch(project_id: str, payload: dict, request: Request, user: User =
         raise HTTPException(422, "Укажите название ветки (до 100 символов)")
     if db.scalar(select(Branch).where(Branch.project_id == project_id, Branch.name == name, Branch.status == "active")):
         raise HTTPException(409, "Ветка с таким названием уже существует")
-    src = resolve_branch(db, project_id, payload.get("from_branch_id"))
+    src = default_branch(db, project_id)  # новая ветка всегда копирует текущее состояние main
     snap = heads(db, src.id)
     b = Branch(project_id=project_id, name=name, base_branch_id=src.id, base_json=json.dumps(snap),
                created_by=user.id)
@@ -1271,7 +1492,14 @@ def version_text(version_id: str, user: User = Depends(current_user), db: Sessio
     kind, text_, _ = extract_text(d.name, read_version(db, v.id))
     if text_ is not None and len(text_) > 500_000:
         text_ = text_[:500_000] + "\n… (показано первые 500 000 символов)"
-    return {"kind": kind, "text": text_, "name": d.name}
+    res = {"kind": kind, "text": text_, "name": d.name}
+    if kind == "visio":
+        try:
+            res["pages"] = [{"name": p["name"], "a": [], "b": p["items"], "changes": []}
+                            for p in visio_scene(read_version(db, v.id))]
+        except Exception:
+            pass
+    return res
 
 
 def ver_doc(db: Session, user: User, version_id: str):
@@ -1284,7 +1512,7 @@ def ver_doc(db: Session, user: User, version_id: str):
 
 
 @app.get("/api/diff")
-def diff_versions(a: Optional[str] = None, b: Optional[str] = None, full: bool = False,
+def diff_versions(a: Optional[str] = None, b: Optional[str] = None, full: bool = False, t: int = 48,
                   user: User = Depends(current_user), db: Session = Depends(get_db)):
     docs, raws = [], []
     for vid in (a, b):
@@ -1302,11 +1530,23 @@ def diff_versions(a: Optional[str] = None, b: Optional[str] = None, full: bool =
                "same": bool(a and b and hashlib.sha256(raws[0]).digest() == hashlib.sha256(raws[1]).digest())}
         if a and b and not res["same"]:
             try:
-                pct, _, resized = pixel_diff(raws[0], raws[1])
+                pct, _, resized = pixel_diff(raws[0], raws[1], max(8, min(t, 160)))
                 res.update(changed_pct=round(pct, 2), resized=resized)
             except Exception as e:
                 res["error"] = "Не удалось построить сравнение изображений: " + str(e)[:120]
         return res
+    if Path(name).suffix.lower() in (".vsdx", ".vsdm"):
+        try:
+            pa = visio_scene(raws[0]) if a else []
+            pb = visio_scene(raws[1]) if b else []
+            pages = []
+            for k in range(max(len(pa), len(pb))):
+                A, B = (pa[k] if k < len(pa) else None), (pb[k] if k < len(pb) else None)
+                pages.append({"name": (B or A)["name"], "a": A["items"] if A else [], "b": B["items"] if B else [],
+                              "changes": scene_changes(A, B)})
+            return {"kind": "visio", "pages": pages}
+        except Exception:
+            pass
     ka, ta, _ = extract_text(name, raws[0]) if a else ("text", "", "")
     kb, tb, _ = extract_text(name, raws[1]) if b else ("text", "", "")
     if "binary" in (ka, kb):
@@ -1364,11 +1604,11 @@ def version_media(version_id: str, h: str, user: User = Depends(current_user), d
 
 
 @app.get("/api/imgdiff")
-def image_diff(a: str, b: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def image_diff(a: str, b: str, t: int = 48, user: User = Depends(current_user), db: Session = Depends(get_db)):
     ver_doc(db, user, a)
     ver_doc(db, user, b)
     try:
-        _, png, _ = pixel_diff(read_version(db, a), read_version(db, b))
+        _, png, _ = pixel_diff(read_version(db, a), read_version(db, b), max(8, min(t, 160)))
     except Exception:
         raise HTTPException(415, "Не удалось построить сравнение изображений")
     return Response(png, media_type="image/png")
