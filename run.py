@@ -85,6 +85,7 @@ def main():
     cfg = json.loads(cfg_file.read_text())
     os.environ.setdefault("DATABASE_URL", "sqlite:///" + (DATA / "docflow.db").as_posix())
     os.environ.setdefault("STORAGE_ROOT", str(DATA / "storage"))
+    os.environ.setdefault("LOG_DIR", str(DATA / "logs"))
     os.environ.setdefault("APP_SECRET_KEY", cfg["app_secret_key"])
     os.environ.setdefault("INITIAL_ADMIN_PASSWORD", cfg["admin_password"])
     shown = lan_ip() if host in ("0.0.0.0", "::") else host

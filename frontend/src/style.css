@@ -104,3 +104,15 @@ figcaption{font-size:11px;color:#667188;padding:6px 8px;background:#f6f8fc}
 .vz-changes{display:flex;flex-wrap:wrap;gap:6px;padding:0 10px 10px}
 .vz-chip{border:1px solid;background:#fff;border-radius:16px;padding:4px 10px;font-size:12px;text-align:left}.vz-chip:hover{background:#f6f8fc}
 .diff-head select{width:auto;padding:4px 8px}
+/* ---- v0.5 ---- */
+.danger2{color:#d23b3b}
+.pg-chips{display:flex;flex-wrap:wrap;gap:6px;padding:10px 12px}
+.pg-chip{position:relative;min-width:38px;padding:6px 8px;border:2px solid;border-radius:8px;background:#fff;font-weight:600}
+.pg-chip.sel{background:#edf2ff}.pg-chip i{position:absolute;top:-4px;right:-4px;width:9px;height:9px;border-radius:50%}
+.pdf-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px;max-height:460px;overflow:auto;padding:4px}
+.pdf-grid figure{margin:0;border:1px solid #e3e8f2;border-radius:8px;overflow:hidden}.pdf-grid img{width:100%;display:block}
+.pw-cell{display:inline-flex;gap:8px;align-items:center}.pw-cell code{background:#f3f6fc;padding:2px 6px;border-radius:5px}
+.log-filters{display:flex;gap:8px;margin-bottom:12px}.log-filters select{width:auto}.log-filters input{flex:1;border:1px solid #dfe5f0}
+.log-path{font-family:Consolas,monospace;font-size:12px;word-break:break-all}.log-msg{max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.log-pre{background:#101a2c;color:#e6edf7;padding:12px;border-radius:8px;max-height:300px;overflow:auto;font-size:12px;white-space:pre-wrap}
+.badge.info{background:#eef1f6;color:#667188}

@@ -5,7 +5,12 @@ import html as htmllib
 import io
 import json
 import re
+import base64
+import logging
+import logging.handlers
 import mimetypes
+import time
+import traceback
 import xml.etree.ElementTree as ET
 import zipfile
 from difflib import SequenceMatcher
@@ -20,7 +25,10 @@ from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from fastapi import FastAPI, Depends, HTTPException, Request, Response, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
 from sqlalchemy import create_engine, String, Text, DateTime, Boolean, ForeignKey, Integer, BigInteger, select, func
@@ -64,6 +72,7 @@ class User(Base):
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    temp_password_enc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
 class Project(Base):
@@ -171,6 +180,22 @@ class BranchHead(Base):
     version_id: Mapped[str] = mapped_column(String(36))
 
 
+class AppLog(Base):
+    __tablename__ = "app_logs"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
+    level: Mapped[str] = mapped_column(String(10), index=True)
+    user_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    username: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    ip: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    method: Mapped[str] = mapped_column(String(10), default="")
+    path: Mapped[str] = mapped_column(String(500), default="")
+    status: Mapped[int] = mapped_column(Integer, default=0)
+    ms: Mapped[int] = mapped_column(Integer, default=0)
+    message: Mapped[str] = mapped_column(Text, default="")
+    details: Mapped[str] = mapped_column(Text, default="")
+
+
 class Template(Base):
     __tablename__ = "templates"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -234,6 +259,7 @@ def current_user(request: Request, db: Session = Depends(get_db)) -> User:
     if not user or user.status != "active":
         request.session.clear()
         raise HTTPException(401, "Сессия недействительна")
+    request.state.uid = user.id
     return user
 
 
@@ -244,7 +270,7 @@ def require_admin(user: User):
 
 def project_access(db: Session, user: User, project_id: str, write: bool = False) -> Project:
     project = db.get(Project, project_id)
-    if not project:
+    if not project or project.status == "deleted":
         raise HTTPException(404, "Проект не найден")
     if user.role == "admin":
         return project
@@ -721,6 +747,11 @@ def extract_text(name: str, raw: bytes):
             return "visio", visio_text(raw), "utf-8"
         except Exception:
             return "binary", None, ""
+    if ext == ".pdf":
+        try:
+            return "pdf", pdf_text(raw), "utf-8"
+        except Exception:
+            return "binary", None, ""
     if ext in BINARY_EXT or b"\0" in raw[:8192]:
         return "binary", None, ""
     text_, enc = decode_text(raw)
@@ -759,6 +790,28 @@ def pixel_diff(ra: bytes, rb: bytes, t: int = 48):
     buf = io.BytesIO()
     out.save(buf, "PNG")
     return pct, buf.getvalue(), resized
+
+
+def pdf_doc(raw: bytes):
+    import fitz  # PyMuPDF
+    return fitz.open(stream=raw, filetype="pdf")
+
+
+def pdf_text(raw: bytes) -> str:
+    doc = pdf_doc(raw)
+    try:
+        return "\n".join(f"=== Страница {i + 1} ===\n" + pg.get_text("text") for i, pg in enumerate(doc))
+    finally:
+        doc.close()
+
+
+def pdf_png(raw: bytes, n: int, z: float) -> bytes:
+    import fitz
+    doc = pdf_doc(raw)
+    try:
+        return doc[n].get_pixmap(matrix=fitz.Matrix(z, z), alpha=False).tobytes("png")
+    finally:
+        doc.close()
 
 
 def image_meta(raw: bytes):
@@ -883,6 +936,155 @@ def plan_merge(db: Session, src: Branch, dst: Branch):
     return items
 
 
+# ============================ Журнал (только для администратора) ============================
+_log_dir = Path(os.environ.get("LOG_DIR", "./logs"))
+_log_dir.mkdir(parents=True, exist_ok=True)
+flog = logging.getLogger("docflow")
+flog.setLevel(logging.INFO)
+if not flog.handlers:
+    _h = logging.handlers.RotatingFileHandler(_log_dir / "docflow.log", maxBytes=5_000_000, backupCount=3, encoding="utf-8")
+    _h.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    flog.addHandler(_h)
+
+
+def record(request: Request, level: str, status: int, ms: int, message: str = "", details: str = "", path: Optional[str] = None):
+    uid = getattr(request.state, "uid", None)
+    full_path = path or (request.url.path + ("?" + request.url.query if request.url.query else ""))
+    try:
+        with SessionLocal() as db:
+            uname = None
+            if uid:
+                u = db.get(User, uid)
+                uname = u.username if u else None
+            row = AppLog(level=level, user_id=uid, username=uname, ip=request.client.host if request.client else None,
+                         method=request.method, path=full_path[:500], status=status, ms=ms,
+                         message=(message or "")[:2000], details=(details or "")[:20000])
+            db.add(row)
+            db.commit()
+            if row.id % 500 == 0:
+                keep = db.scalar(select(func.max(AppLog.id))) - 20000
+                if keep > 0:
+                    db.execute(sa_text("DELETE FROM app_logs WHERE id < :k"), {"k": keep})
+                    db.commit()
+        flog.info("%s user=%s ip=%s %s %s -> %s (%s ms) %s", level.upper(), uname, request.client.host if request.client else "-",
+                  request.method, full_path, status, ms, (message or "").replace("\n", " ")[:300])
+        if details:
+            flog.info(details)
+    except Exception:
+        pass
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    path = request.url.path
+    if not path.startswith("/api/") or path in ("/api/health", "/api/client-log") or path.startswith("/api/admin/logs"):
+        return await call_next(request)
+    t0 = time.time()
+    request.state.err = None
+    try:
+        response = await call_next(request)
+    except Exception:
+        tb = traceback.format_exc()
+        record(request, "error", 500, int((time.time() - t0) * 1000), "Необработанное исключение: " + tb.strip().splitlines()[-1], tb)
+        return JSONResponse({"detail": "Внутренняя ошибка сервера. Подробности — в журнале администратора."}, status_code=500)
+    st = response.status_code
+    if st == 401 and path == "/api/auth/me":
+        return response
+    record(request, "error" if st >= 500 else "warn" if st >= 400 else "info", st, int((time.time() - t0) * 1000),
+           getattr(request.state, "err", None) or "")
+    return response
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _http_exc(request: Request, exc: StarletteHTTPException):
+    request.state.err = str(exc.detail)
+    return JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers=getattr(exc, "headers", None))
+
+
+@app.exception_handler(RequestValidationError)
+async def _val_exc(request: Request, exc: RequestValidationError):
+    errs = jsonable_encoder(exc.errors())
+    request.state.err = "Ошибка данных: " + "; ".join(f"{'.'.join(str(x) for x in e.get('loc', []))}: {e.get('msg')}" for e in errs)
+    return JSONResponse({"detail": errs}, status_code=422)
+
+
+def _log_filter(level: str, q: str):
+    stmt = select(AppLog)
+    if level == "error":
+        stmt = stmt.where(AppLog.level.in_(["error", "client"]))
+    elif level == "warn":
+        stmt = stmt.where(AppLog.level.in_(["error", "client", "warn"]))
+    if q:
+        like = f"%{q}%"
+        stmt = stmt.where(AppLog.path.like(like) | AppLog.username.like(like) | AppLog.message.like(like))
+    return stmt
+
+
+def _log_dict(r: AppLog, details: bool = False):
+    d = {"id": r.id, "at": iso(r.at), "level": r.level, "user": r.username, "ip": r.ip, "method": r.method,
+         "path": r.path, "status": r.status, "ms": r.ms, "message": r.message}
+    if details:
+        d["details"] = r.details
+    return d
+
+
+def _before(db: Session, r: AppLog, n: int):
+    stmt = select(AppLog).where(AppLog.id < r.id)
+    stmt = stmt.where(AppLog.user_id == r.user_id) if r.user_id else stmt.where(AppLog.ip == r.ip)
+    return list(reversed(db.scalars(stmt.order_by(AppLog.id.desc()).limit(n)).all()))
+
+
+@app.get("/api/admin/logs")
+def admin_logs(level: str = "error", q: str = "", limit: int = 300, user: User = Depends(current_user),
+               db: Session = Depends(get_db)):
+    require_admin(user)
+    rows = db.scalars(_log_filter(level, q).order_by(AppLog.id.desc()).limit(max(1, min(limit, 1000)))).all()
+    return [_log_dict(r) for r in rows]
+
+
+@app.get("/api/admin/logs/{log_id}")
+def admin_log_context(log_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    require_admin(user)
+    r = db.get(AppLog, log_id)
+    if not r:
+        raise HTTPException(404, "Запись не найдена")
+    return {"entry": _log_dict(r, True), "before": [_log_dict(x) for x in _before(db, r, 25)]}
+
+
+@app.get("/api/admin/logs-export")
+def admin_logs_export(level: str = "error", q: str = "", user: User = Depends(current_user), db: Session = Depends(get_db)):
+    require_admin(user)
+    rows = list(reversed(db.scalars(_log_filter(level, q).order_by(AppLog.id.desc()).limit(3000)).all()))
+
+    def line(r):
+        return f"[{iso(r.at)}] {r.level.upper()} пользователь={r.username or '-'} ip={r.ip or '-'} {r.method} {r.path} -> {r.status} ({r.ms} мс)"
+    out = ["Журнал DocFlow", f"Выгружено: {iso(now())}, фильтр: {level}", ""]
+    for r in rows:
+        out.append(line(r))
+        if r.message:
+            out.append("    сообщение: " + r.message)
+        if r.details:
+            out.append("    " + r.details.replace("\n", "\n    "))
+        if r.level in ("error", "client"):
+            prev = _before(db, r, 10)
+            if prev:
+                out.append("    Действия перед ошибкой:")
+                out += ["      " + line(x) for x in prev]
+        out.append("")
+    return PlainTextResponse("\n".join(out), headers={"Content-Disposition": f"attachment; filename=docflow-log-{now():%Y%m%d-%H%M}.txt"})
+
+
+@app.post("/api/client-log")
+def client_log(payload: dict, request: Request):
+    uid = request.session.get("user_id")
+    if not uid:
+        return {"ok": False}
+    request.state.uid = uid
+    record(request, "client", 0, 0, str(payload.get("message") or "")[:1500], str(payload.get("stack") or ""),
+           path=str(payload.get("url") or "")[:300])
+    return {"ok": True}
+
+
 # ============================ Старт и миграция ============================
 def migrate():
     Base.metadata.create_all(engine)
@@ -896,6 +1098,7 @@ def migrate():
     addcol("document_versions", "parent_id", "VARCHAR(36)")
     addcol("document_versions", "branch_id", "VARCHAR(36)")
     addcol("folders", "status", "VARCHAR(20) DEFAULT 'active'")
+    addcol("users", "temp_password_enc", "TEXT")
     with engine.begin() as c:
         c.execute(sa_text("UPDATE folders SET status='active' WHERE status IS NULL"))
     with SessionLocal() as db:
@@ -944,6 +1147,7 @@ def login(payload: LoginPayload, request: Request, db: Session = Depends(get_db)
         raise HTTPException(401, "Неверный логин или пароль")
     request.session.clear()
     request.session["user_id"] = user.id
+    request.state.uid = user.id
     user.last_login_at = datetime.now(timezone.utc)
     audit(db, request, "auth.login.success", user.id)
     db.commit()
@@ -976,10 +1180,27 @@ def change_password(payload: PasswordPayload, request: Request, user: User = Dep
     if payload.new_password == payload.current_password:
         raise HTTPException(400, "Новый пароль должен отличаться от текущего")
     user.password_hash = ph.hash(payload.new_password)
+    user.temp_password_enc = None
     user.must_change_password = False
     audit(db, request, "auth.password_changed", user.id)
     db.commit()
     return {"ok": True}
+
+
+def _fernet():
+    from cryptography.fernet import Fernet
+    return Fernet(base64.urlsafe_b64encode(hashlib.sha256(settings.app_secret_key.encode()).digest()))
+
+
+def enc_pw(p: str) -> str:
+    return _fernet().encrypt(p.encode()).decode()
+
+
+def dec_pw(t: Optional[str]) -> Optional[str]:
+    try:
+        return _fernet().decrypt(t.encode()).decode() if t else None
+    except Exception:
+        return None
 
 
 # ============================ Пользователи ============================
@@ -991,7 +1212,8 @@ def list_users(user: User = Depends(current_user), db: Session = Depends(get_db)
     require_admin(user)
     return [{"id": x.id, "full_name": x.full_name, "username": x.username, "email": x.email,
              "role": x.role, "status": x.status, "created_at": iso(x.created_at),
-             "last_login_at": iso(x.last_login_at)} for x in db.scalars(select(User).order_by(User.full_name)).all()]
+             "last_login_at": iso(x.last_login_at), "temp_password": dec_pw(x.temp_password_enc),
+             "must_change_password": x.must_change_password} for x in db.scalars(select(User).order_by(User.full_name)).all()]
 
 
 @app.get("/api/users/directory")
@@ -1015,7 +1237,7 @@ def create_user(payload: dict, request: Request, user: User = Depends(current_us
         raise HTTPException(409, "Такой логин уже существует")
     nu = User(full_name=payload["full_name"].strip(), username=payload["username"].strip(),
               email=(payload.get("email") or None), password_hash=ph.hash(payload["password"]),
-              role=payload["role"], must_change_password=True)
+              role=payload["role"], must_change_password=True, temp_password_enc=enc_pw(payload["password"]))
     db.add(nu)
     audit(db, request, "user.created", user.id, details={"username": nu.username, "role": nu.role})
     db.commit()
@@ -1050,6 +1272,7 @@ def update_user(user_id: str, payload: dict, request: Request, user: User = Depe
             raise HTTPException(422, "Пароль должен содержать не менее 12 символов")
         u.password_hash = ph.hash(payload["new_password"])
         u.must_change_password = u.id != user.id
+        u.temp_password_enc = enc_pw(payload["new_password"]) if u.id != user.id else None
     audit(db, request, "user.updated", user.id, details={"user": u.username, "fields": list(payload.keys())})
     db.commit()
     return {"ok": True}
@@ -1113,10 +1336,10 @@ def delete_template(template_id: str, user: User = Depends(current_user), db: Se
 @app.get("/api/projects")
 def list_projects(user: User = Depends(current_user), db: Session = Depends(get_db)):
     if user.role == "admin":
-        projects = db.scalars(select(Project).order_by(Project.updated_at.desc())).all()
+        projects = db.scalars(select(Project).where(Project.status != "deleted").order_by(Project.updated_at.desc())).all()
     else:
         ids = select(ProjectMember.project_id).where(ProjectMember.user_id == user.id)
-        projects = db.scalars(select(Project).where(Project.id.in_(ids)).order_by(Project.updated_at.desc())).all()
+        projects = db.scalars(select(Project).where(Project.id.in_(ids), Project.status != "deleted").order_by(Project.updated_at.desc())).all()
     return [{"id": p.id, "name": p.name, "description": p.description, "status": p.status,
              "created_at": iso(p.created_at), "updated_at": iso(p.updated_at)} for p in projects]
 
@@ -1140,6 +1363,18 @@ def create_project(payload: ProjectPayload, request: Request, user: User = Depen
           details={"name": p.name, "template": tpl.name if tpl else None})
     db.commit()
     return {"id": p.id, "name": p.name, "description": p.description, "status": p.status}
+
+
+@app.delete("/api/projects/{project_id}")
+def delete_project(project_id: str, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    require_admin(user)
+    p = db.get(Project, project_id)
+    if not p or p.status == "deleted":
+        raise HTTPException(404, "Проект не найден")
+    p.status = "deleted"
+    audit(db, request, "project.deleted", user.id, project_id=p.id, details={"name": p.name})
+    db.commit()
+    return {"ok": True}
 
 
 @app.get("/api/projects/{project_id}/members")
@@ -1493,6 +1728,11 @@ def version_text(version_id: str, user: User = Depends(current_user), db: Sessio
     if text_ is not None and len(text_) > 500_000:
         text_ = text_[:500_000] + "\n… (показано первые 500 000 символов)"
     res = {"kind": kind, "text": text_, "name": d.name}
+    if kind == "pdf":
+        try:
+            res["pages"] = pdf_doc(read_version(db, v.id)).page_count
+        except Exception:
+            pass
     if kind == "visio":
         try:
             res["pages"] = [{"name": p["name"], "a": [], "b": p["items"], "changes": []}
@@ -1535,6 +1775,25 @@ def diff_versions(a: Optional[str] = None, b: Optional[str] = None, full: bool =
             except Exception as e:
                 res["error"] = "Не удалось построить сравнение изображений: " + str(e)[:120]
         return res
+    if Path(name).suffix.lower() == ".pdf":
+        try:
+            na = pdf_doc(raws[0]).page_count if a else 0
+            nb = pdf_doc(raws[1]).page_count if b else 0
+            tt, pages = max(8, min(t, 160)), []
+            for k in range(min(max(na, nb), 80)):
+                if k >= na:
+                    pages.append({"n": k + 1, "status": "added", "pct": 100.0})
+                elif k >= nb:
+                    pages.append({"n": k + 1, "status": "removed", "pct": 100.0})
+                else:
+                    pct = pixel_diff(pdf_png(raws[0], k, 1.2), pdf_png(raws[1], k, 1.2), tt)[0]
+                    pages.append({"n": k + 1, "status": "changed" if pct > 0 else "same", "pct": round(pct, 2)})
+            A = (pdf_text(raws[0]) if a else "").splitlines()
+            B = (pdf_text(raws[1]) if b else "").splitlines()
+            rows, stats = diff_rows(A, B, context=10**9 if full else 3) if len(A) + len(B) <= 40000 else ([], {"added_lines": 0, "removed_lines": 0, "added_chars": 0, "removed_chars": 0})
+            return {"kind": "pdf", "na": na, "nb": nb, "pages": pages, "rows": rows, "stats": stats}
+        except Exception:
+            pass
     if Path(name).suffix.lower() in (".vsdx", ".vsdm"):
         try:
             pa = visio_scene(raws[0]) if a else []
@@ -1564,6 +1823,29 @@ def diff_versions(a: Optional[str] = None, b: Optional[str] = None, full: bool =
         images = {"added": [{"h": h, "name": m["name"], "size": m["size"]} for h, m in mb.items() if h not in ma],
                   "removed": [{"h": h, "name": m["name"], "size": m["size"]} for h, m in ma.items() if h not in mb]}
     return {"kind": kind, "rows": rows, "stats": stats, "images": images}
+
+
+@app.get("/api/versions/{version_id}/pdfpage/{n}")
+def pdf_page(version_id: str, n: int, z: float = 1.5, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    v, d = ver_doc(db, user, version_id)
+    try:
+        png = pdf_png(read_version(db, v.id), n - 1, max(0.4, min(z, 4.0)))
+    except Exception:
+        raise HTTPException(404, "Страница не найдена или PDF не читается")
+    return Response(png, media_type="image/png")
+
+
+@app.get("/api/pdfdiff")
+def pdf_diff_png(a: str, b: str, n: int, t: int = 48, z: float = 1.5, user: User = Depends(current_user),
+                 db: Session = Depends(get_db)):
+    ver_doc(db, user, a)
+    ver_doc(db, user, b)
+    try:
+        z = max(0.4, min(z, 4.0))
+        _, png, _ = pixel_diff(pdf_png(read_version(db, a), n - 1, z), pdf_png(read_version(db, b), n - 1, z), max(8, min(t, 160)))
+    except Exception:
+        raise HTTPException(404, "Не удалось построить сравнение страницы")
+    return Response(png, media_type="image/png")
 
 
 @app.get("/api/versions/{version_id}/view")
@@ -1662,7 +1944,8 @@ def history(project_id: Optional[str] = None, branch_id: Optional[str] = None, d
     else:
         pids = [m.project_id for m in db.scalars(select(ProjectMember).where(ProjectMember.user_id == user.id)).all()]
     names = user_names(db)
-    pnames = {p.id: p.name for p in db.scalars(select(Project).where(Project.id.in_(pids))).all()} if pids else {}
+    pnames = {p.id: p.name for p in db.scalars(select(Project).where(Project.id.in_(pids), Project.status != "deleted")).all()} if pids else {}
+    pids = list(pnames)
     bnames = {b.id: b.name for b in db.scalars(select(Branch).where(Branch.project_id.in_(pids))).all()} if pids else {}
     q = select(Version, Document).join(Document, Document.id == Version.document_id).where(Document.project_id.in_(pids))
     if branch_id:

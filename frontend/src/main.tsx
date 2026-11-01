@@ -255,6 +255,132 @@ function VisioDiff({ d, a, b, single }: { d: any; a?: string | null; b?: string 
   );
 }
 
+function TextBlock({ d, full, setFull }: { d: any; full: boolean; setFull: (f: boolean) => void }) {
+  const st = d.stats;
+  if (!st.added_lines && !st.removed_lines) return <div className="muted pad">Текст документа не изменился.</div>;
+  return (
+    <div className="diff">
+      <div className="diff-head">
+        Изменения текста: <b className="add-t">+{st.added_lines}</b> <b className="del-t">−{st.removed_lines}</b> строк · символов: <b className="add-t">+{st.added_chars}</b> <b className="del-t">−{st.removed_chars}</b>
+        <button className="text-button" onClick={() => setFull(!full)}>{full ? 'Только изменения' : 'Показать весь текст'}</button>
+      </div>
+      <div className="diff-body">
+        {d.rows.map((r: any, i: number) => {
+          if (r.t === 'skip') return <div className="dl skip" key={i}>⋯ {r.n} неизменённых строк</div>;
+          if (r.t === 'eq') return <div className="dl" key={i}><span className="ln">{r.an}</span><span className="ln">{r.bn}</span><span className="sg"> </span><code><Segs s={r.a} /></code></div>;
+          if (r.t === 'del') return <div className="dl del" key={i}><span className="ln">{r.an}</span><span className="ln" /><span className="sg">−</span><code><Segs s={r.a} /></code></div>;
+          if (r.t === 'add') return <div className="dl add" key={i}><span className="ln" /><span className="ln">{r.bn}</span><span className="sg">+</span><code><Segs s={r.b} /></code></div>;
+          return (
+            <React.Fragment key={i}>
+              <div className="dl del"><span className="ln">{r.an}</span><span className="ln" /><span className="sg">−</span><code><Segs s={r.a} /></code></div>
+              <div className="dl add"><span className="ln" /><span className="ln">{r.bn}</span><span className="sg">+</span><code><Segs s={r.b} /></code></div>
+            </React.Fragment>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+const PST: any = { changed: ['#e08a00', 'изменена'], same: ['#8b95a7', 'без изменений'], added: ['#1f8a52', 'добавлена'], removed: ['#d23b3b', 'удалена'] };
+
+function PdfDiff({ d, a, b, t, setT, full, setFull }: any) {
+  const [pi, setPi] = useState(Math.max(0, d.pages.findIndex((p: any) => p.status !== 'same')));
+  const [lb, setLb] = useState<number | null>(null);
+  const pg = d.pages[Math.min(pi, d.pages.length - 1)];
+  const changed = d.pages.filter((p: any) => p.status !== 'same').length;
+  const build = (z: number) => {
+    const l: { label: string; src: string }[] = [];
+    if (pg && pg.status !== 'added') l.push({ label: 'Было', src: `/api/versions/${a}/pdfpage/${pg.n}?z=${z}` });
+    if (pg && pg.status !== 'removed') l.push({ label: 'Стало', src: `/api/versions/${b}/pdfpage/${pg.n}?z=${z}` });
+    if (pg && pg.status === 'changed') l.push({ label: 'Отличия', src: `/api/pdfdiff?a=${a}&b=${b}&n=${pg.n}&t=${t}&z=${z}` });
+    return l;
+  };
+  const small = build(1.3), big = build(2.6);
+  return (
+    <div>
+      <div className="img-diff">
+        <div className="diff-head">
+          <b>{changed ? `Страниц с изменениями: ${changed} из ${d.pages.length}` : 'Визуально страницы не отличаются'}</b>
+          <span className="vz-tools">Чувствительность: <select value={t} onChange={e => setT(+e.target.value)}><option value={90}>Низкая</option><option value={48}>Средняя</option><option value={24}>Высокая</option></select></span>
+        </div>
+        <div className="pg-chips">{d.pages.map((p: any, k: number) => (
+          <button key={k} className={`pg-chip ${k === pi ? 'sel' : ''}`} style={{ borderColor: PST[p.status][0] }} onClick={() => setPi(k)} title={`${PST[p.status][1]}${p.status === 'changed' ? ` (≈${p.pct}%)` : ''}`}>
+            {p.n}{p.status !== 'same' && <i style={{ background: PST[p.status][0] }} />}</button>))}</div>
+        {pg && <div className="muted pad">Страница {pg.n}: {PST[pg.status][1]}{pg.status === 'changed' ? ` — изменено ≈${pg.pct}% площади` : ''}. Нажмите на изображение, чтобы увеличить.</div>}
+        <div className="img-trio">{small.map((m, k) => <figure key={m.label + pg.n}><figcaption>{m.label}</figcaption><img src={m.src} className="zoomable" onClick={() => setLb(k)} /></figure>)}</div>
+        {lb !== null && <Lightbox imgs={big} start={lb} onClose={() => setLb(null)} />}
+      </div>
+      <TextBlock d={d} full={full} setFull={setFull} />
+    </div>
+  );
+}
+
+function PdfPreview({ v, pages }: { v: any; pages: number }) {
+  const [lb, setLb] = useState<number | null>(null);
+  const n = Math.min(pages || 0, 100);
+  const big = Array.from({ length: n }, (_, k) => ({ label: `Стр. ${k + 1}`, src: `/api/versions/${v.id}/pdfpage/${k + 1}?z=2.6` }));
+  return (
+    <div>
+      <div className="muted pad">Страниц: {pages}. Нажмите на страницу, чтобы открыть крупно (колесо — масштаб, ←/→ — страницы).</div>
+      <div className="pdf-grid">{Array.from({ length: n }, (_, k) => <figure key={k}><img loading="lazy" className="zoomable" src={`/api/versions/${v.id}/pdfpage/${k + 1}?z=0.9`} onClick={() => setLb(k)} /><figcaption>Стр. {k + 1}</figcaption></figure>)}</div>
+      {lb !== null && <Lightbox imgs={big} start={lb} onClose={() => setLb(null)} />}
+    </div>
+  );
+}
+
+function PwCell({ u }: { u: any }) {
+  const [show, setShow] = useState(false);
+  if (!u.temp_password) return <span className="muted" title="Пароль хранится только в виде хэша и недоступен для просмотра. Администратор может задать новый.">задан пользователем</span>;
+  return (
+    <span className="pw-cell"><code>{show ? u.temp_password : '••••••••••'}</code>
+      <button className="text-button" onClick={() => setShow(!show)}>{show ? 'Скрыть' : 'Показать'}</button>
+      <button className="text-button" onClick={() => navigator.clipboard?.writeText(u.temp_password)}>Копировать</button></span>
+  );
+}
+
+const genPw = () => {
+  const set = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const arr = new Uint32Array(14); crypto.getRandomValues(arr);
+  return Array.from(arr, x => set[x % set.length]).join('') + '!7';
+};
+
+function LogsView() {
+  const [level, setLevel] = useState('error'), [q, setQ] = useState(''), [rows, setRows] = useState<any[] | null>(null), [err, setErr] = useState(''), [sel, setSel] = useState<any>(null);
+  const load = () => { setRows(null); setErr(''); api(`/admin/logs?level=${level}&q=${encodeURIComponent(q)}`).then(setRows).catch(e => setErr(e.message)); };
+  useEffect(load, [level]);
+  const open = (id: number) => api(`/admin/logs/${id}`).then(setSel).catch(e => setErr(e.message));
+  const LV: any = { error: ['removed', 'ошибка'], client: ['conflict', 'браузер'], warn: ['modified', 'предупр.'], info: ['info', 'действие'] };
+  return (
+    <section className="content">
+      <div className="section-heading"><div><h2>Журнал работы</h2><p>Ошибки сервера и браузера и действия пользователей. Нажмите на запись, чтобы увидеть, что происходило перед ней.</p></div>
+        <a className="primary" style={{ textDecoration: 'none' }} href={`/api/admin/logs-export?level=${level}&q=${encodeURIComponent(q)}`}>Выгрузить журнал (.txt)</a></div>
+      <div className="log-filters">
+        <select value={level} onChange={e => setLevel(e.target.value)}><option value="error">Только ошибки</option><option value="warn">Ошибки и предупреждения</option><option value="all">Все действия</option></select>
+        <input placeholder="Поиск: пользователь, адрес, текст ошибки" value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => e.key === 'Enter' && load()} />
+        <button className="secondary" onClick={load}>Обновить</button>
+      </div>
+      {err && <div className="notice">{err}</div>}
+      {!rows ? <div className="muted pad">Загрузка…</div> : (
+        <div className="table-wrap"><table><thead><tr><th>Время</th><th>Тип</th><th>Пользователь</th><th>Запрос</th><th>Код</th><th>Сообщение</th></tr></thead><tbody>
+          {rows.map(r => <tr key={r.id} onClick={() => open(r.id)}><td>{fmt(r.at)}</td><td><span className={`badge ${LV[r.level][0]}`}>{LV[r.level][1]}</span></td><td>{r.user || '—'}</td>
+            <td className="log-path">{r.method} {r.path}</td><td>{r.status || '—'}</td><td className="log-msg">{r.message}</td></tr>)}
+        </tbody></table>{!rows.length && <div className="empty-inline"><b>Записей нет</b><span>Ошибок пока не было.</span></div>}</div>
+      )}
+      {sel && <Modal title={`Запись журнала #${sel.entry.id}`} onClose={() => setSel(null)} wide>
+        <p><span className={`badge ${LV[sel.entry.level][0]}`}>{LV[sel.entry.level][1]}</span> {fmt(sel.entry.at)} · пользователь: <b>{sel.entry.user || '—'}</b> · ip {sel.entry.ip || '—'}</p>
+        <p><code>{sel.entry.method} {sel.entry.path}</code> → {sel.entry.status || '—'} ({sel.entry.ms} мс)</p>
+        {sel.entry.message && <div className="notice">{sel.entry.message}</div>}
+        {sel.entry.details && <pre className="log-pre">{sel.entry.details}</pre>}
+        <h3>Действия этого пользователя перед записью</h3>
+        <div className="table-wrap"><table><tbody>{sel.before.map((x: any) => <tr key={x.id}><td>{fmt(x.at)}</td><td><span className={`badge ${LV[x.level][0]}`}>{LV[x.level][1]}</span></td><td className="log-path">{x.method} {x.path}</td><td>{x.status || '—'}</td><td className="log-msg">{x.message}</td></tr>)}</tbody></table>
+          {!sel.before.length && <div className="muted pad">Предыдущих действий нет</div>}</div>
+        <div className="modal-actions"><button className="secondary" onClick={() => setSel(null)}>Закрыть</button></div>
+      </Modal>}
+    </section>
+  );
+}
+
 function ImgDiff({ d, a, b, t, setT }: { d: any; a?: string | null; b?: string | null; t: number; setT: (n: number) => void }) {
   const [lb, setLb] = useState<number | null>(null);
   const meta = (m: any) => (m ? `${m.w && m.h ? `${m.w}×${m.h}, ` : ''}${fmtSize(m.size)}` : '');
@@ -304,6 +430,7 @@ function DiffView({ a, b }: { a?: string | null; b?: string | null }) {
   if (!d) return <div className="muted pad">Загрузка изменений…</div>;
   if (d.kind === 'image') return <ImgDiff d={d} a={a} b={b} t={t} setT={setT} />;
   if (d.kind === 'visio' && d.pages) return <VisioDiff d={d} a={a} b={b} />;
+  if (d.kind === 'pdf') return <PdfDiff d={d} a={a} b={b} t={t} setT={setT} full={full} setFull={setFull} />;
   if (d.kind === 'binary') return <div className="muted pad">Для этого типа файла (PDF, Excel, старые .doc/.vsd и т. п.) сравнение содержимого недоступно. {d.same ? 'Файлы идентичны.' : `Файлы различаются (${fmtSize(d.size_a)} → ${fmtSize(d.size_b)}).`}</div>;
   if (d.kind === 'toolarge') return <div className="muted pad">Файл слишком большой для построчного сравнения.</div>;
   const st = d.stats, im = d.images || { added: [], removed: [] };
@@ -476,6 +603,13 @@ function App() {
   const fail = (e: any) => setNotice(e.message || String(e));
 
   useEffect(() => { api('/auth/me').then(setUser).catch(() => {}); }, []);
+  useEffect(() => {   // ошибки браузера попадают в журнал администратора
+    const send = (message: string, stack?: string) => { fetch('/api/client-log', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message, stack, url: location.pathname }) }).catch(() => {}); };
+    const onErr = (e: ErrorEvent) => send(e.message, e.error?.stack);
+    const onRej = (e: PromiseRejectionEvent) => send('Необработанная ошибка: ' + (e.reason?.message || e.reason), e.reason?.stack);
+    window.addEventListener('error', onErr); window.addEventListener('unhandledrejection', onRej);
+    return () => { window.removeEventListener('error', onErr); window.removeEventListener('unhandledrejection', onRej); };
+  }, []);
   useEffect(() => { if (user) { refreshProjects(); if (user.must_change_password) setModal('password'); } }, [user]);
   useEffect(() => { if (folder && branchId) refreshDocs(); }, [folder, branchId]);
   useEffect(() => {   // вставка из буфера на странице файлов (без открытого окна) — открывает окно загрузки
@@ -606,6 +740,11 @@ function App() {
     const name = window.prompt('Название шаблона (будет сохранена структура папок проекта)');
     if (name && name.trim()) run(() => post('/templates', { name, from_project_id: project.id }), 'Шаблон сохранён');
   };
+  const deleteProject = () => {
+    if (!window.confirm(`Удалить проект «${project.name}» со всеми папками, файлами и ветками? Проект исчезнет у всех пользователей.`)) return;
+    if (window.prompt('Для подтверждения введите название проекта') !== project.name) return setNotice('Название не совпало — проект не удалён');
+    run(async () => { await api(`/projects/${project.id}`, { method: 'DELETE' }); goHome(); await refreshProjects(); }, 'Проект удалён');
+  };
   const openUsers = async () => { setView('users'); setProject(null); try { setUsers(await api('/users')); } catch (e) { fail(e); } };
   const openTemplates = async () => { setView('templates'); setProject(null); try { setTemplates(await api('/templates')); } catch (e) { fail(e); } };
   const changePassword = () => {
@@ -666,9 +805,9 @@ function App() {
         <div className="brand"><div className="brand-icon"><HardDrive size={20} /></div><div><b>DocFlow</b><small>Рабочее пространство</small></div></div>
         <div className="nav-label">РАБОЧЕЕ</div>
         <button className={view === 'home' ? 'nav-item active' : 'nav-item'} onClick={goHome}><HardDrive size={17} />Обзор</button>
-        <button className={view === 'project' && tab === 'branches' ? 'nav-item active' : 'nav-item'} onClick={() => project ? (setView('project'), setTab('branches')) : setNotice('Сначала откройте проект — ветки создаются внутри проекта.')}><GitBranch size={17} />Ветки</button>
         <button className={view === 'history' ? 'nav-item active' : 'nav-item'} onClick={() => { setView('history'); setProject(null); }}><Clock3 size={17} />История</button>
         {canManage && <button className={view === 'templates' ? 'nav-item active' : 'nav-item'} onClick={openTemplates}><Folder size={17} />Шаблоны папок</button>}
+        {user.role === 'admin' && <button className={view === 'logs' ? 'nav-item active' : 'nav-item'} onClick={() => { setView('logs'); setProject(null); }}><Clock3 size={17} />Журнал</button>}
         {user.role === 'admin' && <button className={view === 'users' ? 'nav-item active' : 'nav-item'} onClick={openUsers}><Users size={17} />Пользователи</button>}
         <div className="nav-label projects-label">ПРОЕКТЫ {canManage && <button onClick={openNewProject} title="Создать проект"><Plus size={15} /></button>}</div>
         {projects.map(p => <button key={p.id} className={`project-link ${project?.id === p.id ? 'active' : ''}`} onClick={() => openProject(p)}><span className="project-dot" /><span>{p.name}</span></button>)}
@@ -688,6 +827,7 @@ function App() {
             {view === 'project' && crumbs.map(c => <React.Fragment key={c.id}><ChevronRight size={15} /><button className="crumb" onClick={() => { setTab('files'); setFolder(c); }}>{c.name}</button></React.Fragment>)}
             {view === 'history' && <><ChevronRight size={15} /><b>История</b></>}
             {view === 'users' && <><ChevronRight size={15} /><b>Пользователи</b></>}
+            {view === 'logs' && <><ChevronRight size={15} /><b>Журнал</b></>}
             {view === 'templates' && <><ChevronRight size={15} /><b>Шаблоны папок</b></>}
           </div>
           <div className="top-actions"><div className="searchbox"><Search size={16} /><input placeholder="Поиск в текущем списке..." value={search} onChange={e => setSearch(e.target.value)} /></div></div>
@@ -712,12 +852,14 @@ function App() {
 
         {view === 'history' && <section className="content"><div className="section-heading"><div><h2>История изменений</h2><p>Все версии файлов и операции по доступным вам проектам.</p></div></div><History /></section>}
 
+        {view === 'logs' && <LogsView />}
+
         {view === 'users' && (
           <section className="content">
             <div className="section-heading"><div><h2>Пользователи</h2><p>Создание учётных записей, роли, сброс пароля и блокировка.</p></div>
               <button className="primary" onClick={() => { setEditUser(null); setUf({ role: 'member' }); setModal('user'); }}><Plus size={16} />Новый пользователь</button></div>
-            <div className="table-wrap"><table><thead><tr><th>ФИО</th><th>Логин</th><th>Роль</th><th>Статус</th><th>Последний вход</th><th /></tr></thead><tbody>
-              {users.map(u => <tr key={u.id}><td><b>{u.full_name}</b></td><td>{u.username}</td><td>{ROLE[u.role]}</td><td>{u.status === 'active' ? 'Активен' : 'Заблокирован'}</td><td>{fmt(u.last_login_at)}</td>
+            <div className="table-wrap"><table><thead><tr><th>ФИО</th><th>Логин</th><th>Роль</th><th>Статус</th><th>Последний вход</th><th>Пароль</th><th /></tr></thead><tbody>
+              {users.map(u => <tr key={u.id}><td><b>{u.full_name}</b></td><td>{u.username}</td><td>{ROLE[u.role]}</td><td>{u.status === 'active' ? 'Активен' : 'Заблокирован'}</td><td>{fmt(u.last_login_at)}</td><td><PwCell u={u} /></td>
                 <td><button className="text-button" onClick={() => { setEditUser(u); setUf({ ...u, new_password: '' }); setModal('user'); }}>Изменить</button></td></tr>)}
             </tbody></table></div>
           </section>
@@ -749,6 +891,7 @@ function App() {
                 <button className="secondary" onClick={() => { setNewName(''); setModal('branch'); }}><GitBranch size={16} />Новая ветка</button>
                 <button className="secondary" onClick={openMembers}><Users size={16} />Участники</button>
                 {canManage && <button className="secondary" onClick={saveAsTemplate}>Сохранить как шаблон</button>}
+                {user.role === 'admin' && <button className="secondary danger2" onClick={deleteProject}>Удалить проект</button>}
               </div>
             </div>
             <div className="tabs">{[['files', 'Файлы'], ['branches', 'Ветки'], ['history', 'История']].map(([k, l]) => <button key={k} className={tab === k ? 'tab active' : 'tab'} onClick={() => setTab(k)}>{l}</button>)}</div>
@@ -832,7 +975,7 @@ function App() {
               {!v.is_head && <button className="text-button" onClick={() => restore(v)}>Восстановить</button>}
             </div></div>))}</div>
         {preview && <div className="preview"><div className="diff-head"><b>Версия {preview.v.version_number}</b><button className="text-button" onClick={() => setPreview(null)}>Закрыть</button></div>
-          {preview.kind === 'visio' && preview.pages ? <VisioDiff d={{ pages: preview.pages }} a={null} b={preview.v.id} single /> : preview.kind === 'image' ? <img className="pv-img" src={`/api/versions/${preview.v.id}/view`} /> : preview.text === null ? <div className="muted pad">Просмотр этого типа файла недоступен — скачайте файл.</div> : <pre>{preview.text}</pre>}</div>}
+          {preview.kind === 'pdf' && preview.pages ? <PdfPreview v={preview.v} pages={preview.pages} /> : preview.kind === 'visio' && preview.pages ? <VisioDiff d={{ pages: preview.pages }} a={null} b={preview.v.id} single /> : preview.kind === 'image' ? <img className="pv-img" src={`/api/versions/${preview.v.id}/view`} /> : preview.text === null ? <div className="muted pad">Просмотр этого типа файла недоступен — скачайте файл.</div> : <pre>{preview.text}</pre>}</div>}
         {cmp && <div className="preview"><div className="diff-head"><b>{cmp.title}</b><button className="text-button" onClick={() => setCmp(null)}>Закрыть</button></div><DiffView a={cmp.a} b={cmp.b} /></div>}
         <div className="modal-actions"><button className="secondary danger-btn" onClick={() => deleteDoc(doc)}><Trash2 size={15} /> Удалить из ветки</button><button className="secondary" onClick={close}>Закрыть</button></div></Modal>}
 
@@ -854,6 +997,8 @@ function App() {
         <label>Роль<select value={uf.role} onChange={e => setUf({ ...uf, role: e.target.value })}><option value="member">Участник</option><option value="project_manager">Руководитель</option><option value="observer">Наблюдатель</option><option value="admin">Администратор</option></select></label>
         {editUser && <label>Статус<select value={uf.status} onChange={e => setUf({ ...uf, status: e.target.value })}><option value="active">Активен</option><option value="blocked">Заблокирован</option></select></label>}
         <label>{editUser ? 'Новый пароль (оставьте пустым, чтобы не менять)' : 'Стартовый пароль (не менее 12 символов)'}<input type="text" value={(editUser ? uf.new_password : uf.password) || ''} onChange={e => setUf({ ...uf, [editUser ? 'new_password' : 'password']: e.target.value })} /></label>
+        <button type="button" className="secondary" onClick={() => setUf({ ...uf, [editUser ? 'new_password' : 'password']: genPw() })}>Сгенерировать пароль</button>
+        {editUser && (editUser.temp_password ? <p className="muted">Текущий временный пароль: <b>{editUser.temp_password}</b> (действует, пока пользователь не сменит его сам)</p> : <p className="muted">Пароль задан самим пользователем — посмотреть его нельзя (хранится только хэш), можно задать новый.</p>)}
         <p className="muted">Пользователь сменит стартовый пароль при первом входе.</p>
         <div className="modal-actions"><button className="secondary" onClick={() => { setModal(''); setEditUser(null); }}>Отмена</button><button className="primary" disabled={loading || !uf.full_name} onClick={saveUser}>Сохранить</button></div></Modal>}
 
