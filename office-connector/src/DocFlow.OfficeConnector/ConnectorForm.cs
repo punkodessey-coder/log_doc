@@ -29,7 +29,7 @@ namespace DocFlow.OfficeConnector
         }
         private void BuildUi()
         {
-            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(14), ColumnCount = 2, RowCount = 10 };
+            var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(14), ColumnCount = 2, RowCount = 0 };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 125)); layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             Controls.Add(layout);
             server = AddText(layout, "Адрес сервера", "http://127.0.0.1:8000");
@@ -52,7 +52,7 @@ namespace DocFlow.OfficeConnector
             branches.SelectedIndexChanged += async (s,e) => await LoadDocuments();
             folders.SelectedIndexChanged += async (s,e) => await LoadDocuments();
             documents.SelectedIndexChanged += async (s,e) => await LoadVersions();
-            Shown += async (s,e) => await ConnectAndLoad();
+            Shown += async (s,e) => await ConnectAndLoad();\n            FormClosed += (s,e) => { if (client != null) client.Dispose(); };
         }
         private TextBox AddText(TableLayoutPanel p, string label, string value)
         {
