@@ -5,7 +5,7 @@ using Microsoft.Win32;
 
 namespace DocFlow.OfficeConnector
 {
-    [Guid("000C0396-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsDual)]
+    [ComImport, Guid("000C0396-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsDual)]
     public interface IRibbonExtensibility
     {
         [DispId(1)]
@@ -13,10 +13,9 @@ namespace DocFlow.OfficeConnector
         string GetCustomUI([MarshalAs(UnmanagedType.BStr)] string ribbonID);
     }
 
-    // Office defines IDTExtensibility2 as an IDispatch interface. The IID below
-    // is the official Office IID; using InterfaceIsIUnknown prevents Office from
-    // invoking the lifecycle methods through the expected dispatch contract.
-    [Guid("B65AD801-ABAF-11D0-BB8B-00A0C90F2744"), InterfaceType(ComInterfaceType.InterfaceIsIDispatch), TypeLibType(TypeLibTypeFlags.FHidden | TypeLibTypeFlags.FDispatchable)]
+    // Office imports IDTExtensibility2 by its official COM IID. ComImport ensures
+    // the managed COM Callable Wrapper exposes the real Office interface through QueryInterface.
+    [ComImport, Guid("B65AD801-ABAF-11D0-BB8B-00A0C90F2744"), InterfaceType(ComInterfaceType.InterfaceIsIDispatch), TypeLibType(TypeLibTypeFlags.FHidden | TypeLibTypeFlags.FDispatchable)]
     public interface IDTExtensibility2
     {
         [DispId(1)]
