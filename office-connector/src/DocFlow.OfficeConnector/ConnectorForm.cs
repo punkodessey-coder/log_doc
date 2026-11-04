@@ -92,8 +92,9 @@ namespace DocFlow.OfficeConnector
                 UseWaitCursor = true;
                 branchItems = await client.Branches(p.Id); branches.DataSource = branchItems; branches.DisplayMember = "Name";
                 folderItems = await client.Folders(p.Id);
-                var roots = folderItems.Where(x => String.IsNullOrEmpty(x.ParentId)).ToList();
-                folders.DataSource = roots; folders.DisplayMember = "Name";
+                foreach (var folder in folderItems)
+                    if (!String.IsNullOrEmpty(folder.ParentId)) folder.Name = "↳ " + folder.Name;
+                folders.DataSource = folderItems; folders.DisplayMember = "Name";
                 if (branchItems.Count > 0) await LoadDocuments();
             }
             catch (Exception ex) { SetStatus("Ошибка загрузки проекта: " + ex.Message); }
