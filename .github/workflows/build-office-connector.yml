@@ -22,55 +22,100 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
-      - name: Build x64-compatible .NET Framework 4.8 add-in
+      - name: Build .NET Framework 4.8 add-in
         shell: pwsh
         run: |
           msbuild office-connector/src/DocFlow.OfficeConnector/DocFlow.OfficeConnector.csproj /m /t:Rebuild /restore /p:Configuration=Release /p:Platform=AnyCPU
 
-      - name: Assemble installation package
+      - name: Assemble offline installation package
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $package = 'dist/DocFlow-Office-Connector-Win11-Office-x64'
-          New-Item -ItemType Directory -Force -Path "$package/bin", "$package/scripts", "$package/docs" | Out-Null
+          $name = 'DocFlow-Office-Connector-Win11-Office-x64'
+          $package = "dist/$name"
+          New-Item -ItemType Directory -Force -Path "$package/bin", "$package/scripts" | Out-Null
           Copy-Item 'office-connector/src/DocFlow.OfficeConnector/bin/Release/DocFlow.OfficeConnector.dll' "$package/bin/"
           Copy-Item 'office-connector/scripts/install.ps1' "$package/scripts/"
           Copy-Item 'office-connector/scripts/uninstall.ps1' "$package/scripts/"
-          Copy-Item 'office-connector/docs/INSTALL_RU.md' "$package/INSTALL_RU.md"
+          Copy-Item 'office-connector/DocFlow_Office_Uninstall.bat' "$package/УДАЛИТЬ.bat"
+
           @'
           @echo off
+          setlocal
           chcp 65001 >nul
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\install.ps1" -DllPath "%~dp0bin\DocFlow.OfficeConnector.dll" -OfficeBitness x64
+          title DocFlow Office Connector
+          echo.
+          echo ==========================================
+          echo   Установка DocFlow Office Connector
+          echo ==========================================
+          echo.
+          echo Установщик автономный: подключение к Интернету не требуется.
+          echo Закройте Word, Excel и Visio перед продолжением.
+          echo.
+          set "DF_DLL=%~dp0bin\DocFlow.OfficeConnector.dll"
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\install.ps1" -DllPath "%DF_DLL%" -OfficeBitness x64
           if errorlevel 1 (
             echo.
-            echo Installation failed. See the PowerShell error above.
+            echo Ошибка установки. Смотрите сообщение PowerShell выше.
             pause
             exit /b 1
           )
           echo.
-          echo Installation completed. Restart Word, Excel or Visio.
+          echo Установка завершена. Перезапустите Word, Excel и Visio.
           pause
           '@ | Set-Content -Encoding UTF8 "$package/УСТАНОВИТЬ.bat"
-          @'
-          Copy-Item 'office-connector/DocFlow_Office_Uninstall.bat' "$package/УДАЛИТЬ.bat"
-          @'
-          DocFlow Office Connector
-          Сборка: Windows x64 / Microsoft Office 64-bit / .NET Framework 4.8
-          
-          Установка:
-          1. Закройте Word, Excel и Visio.
-          2. Запустите УСТАНОВИТЬ.bat.
-          3. Подтвердите запрос контроля учётных записей Windows.
-          4. Откройте Office. На вкладке DocFlow укажите адрес сервера DocFlow в локальной сети.
-          
-          Удаление: закройте Office и запустите УДАЛИТЬ.bat.
-          '@ | Set-Content -Encoding UTF8 "$package/ПРОЧИТАЙТЕ.txt"
-          Compress-Archive -Path "$package/*" -DestinationPath 'dist/DocFlow-Office-Connector-Win11-Office-x64.zip' -Force
 
-      - name: Upload installer ZIP
+          @'
+          DocFlow Office Connector — автономный пакет
+          Требования: Windows 10/11, настольный Microsoft Office 64-bit, .NET Framework 4.8.
+          Установка: закройте Office и запустите УСТАНОВИТЬ.bat от имени обычного пользователя; UAC будет запрошен автоматически.
+          Удаление: закройте Office и запустите УДАЛИТЬ.bat.
+          Интернет и доступ к GitHub для установки не нужны.
+          '@ | Set-Content -Encoding UTF8 "$package/ПРОЧИТАЙТЕ.txt"
+
+          # Build a portable ZIP containing every file needed by the installer.
+          $payloadZip = 'dist/DocFlow-Office-Connector-Payload.zip'
+          Compress-Archive -Path "$package/*" -DestinationPath $payloadZip -Force
+          $base64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($payloadZip))
+          $wrapped = ($base64 -split '(.{1,120})' | Where-Object { $_ }) -join "`r`n"
+
+          # The single BAT embeds the ZIP payload. At run time it only decodes
+          # and extracts local data; it never contacts GitHub or the network.
+          $standalone = @'
+          @echo off
+          setlocal
+          chcp 65001 >nul
+          title DocFlow Office Connector — автономная установка
+          echo.
+          echo Автономная установка DocFlow Office Connector
+          echo Подключение к Интернету не используется.
+          echo.
+          set "DF_SELF=%~f0"
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $raw=[IO.File]::ReadAllText($env:DF_SELF); $marker='###DOCFLOW_PAYLOAD_BASE64###'; $pos=$raw.IndexOf($marker); if($pos -lt 0){throw 'Встроенный пакет не найден.'}; $b64=($raw.Substring($pos+$marker.Length) -replace '\s',''); $root=Join-Path $env:ProgramData 'DocFlow\OfficeConnectorInstaller'; New-Item -ItemType Directory -Force -Path $root | Out-Null; $zip=Join-Path $root 'payload.zip'; [IO.File]::WriteAllBytes($zip,[Convert]::FromBase64String($b64)); $dest=Join-Path $root 'package'; if(Test-Path $dest){Remove-Item $dest -Recurse -Force}; Expand-Archive -LiteralPath $zip -DestinationPath $dest -Force; $script=Join-Path $dest 'scripts\install.ps1'; $dll=Join-Path $dest 'bin\DocFlow.OfficeConnector.dll'; & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -DllPath $dll -OfficeBitness x64; exit $LASTEXITCODE"
+          set "RC=%ERRORLEVEL%"
+          if not "%RC%"=="0" (
+            echo.
+            echo Установка не выполнена. Код ошибки: %RC%
+          ) else (
+            echo.
+            echo Установка завершена. Перезапустите Office.
+          )
+          echo.
+          pause
+          exit /b %RC%
+          ###DOCFLOW_PAYLOAD_BASE64###
+          '@
+          $standalone = $standalone.Replace("          ", "")
+          $standalone += "`r`n" + $wrapped + "`r`n"
+          [IO.File]::WriteAllText('dist/DocFlow_Office_Install.bat', $standalone, [Text.Encoding]::ASCII)
+
+      - name: Upload offline installers
         uses: actions/upload-artifact@v4
         with:
-          name: DocFlow-Office-Connector-Win11-Office-x64
-          path: dist/DocFlow-Office-Connector-Win11-Office-x64/
+          name: DocFlow-Office-Connector-Offline-Installers
+          path: |
+            dist/DocFlow_Office_Install.bat
+            dist/DocFlow-Office-Connector-Win11-Office-x64/
+            dist/DocFlow-Office-Connector-Payload.zip
           if-no-files-found: error
           retention-days: 30
