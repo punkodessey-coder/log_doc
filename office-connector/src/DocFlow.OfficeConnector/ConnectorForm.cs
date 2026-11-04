@@ -52,7 +52,8 @@ namespace DocFlow.OfficeConnector
             branches.SelectedIndexChanged += async (s,e) => await LoadDocuments();
             folders.SelectedIndexChanged += async (s,e) => await LoadDocuments();
             documents.SelectedIndexChanged += async (s,e) => await LoadVersions();
-            Shown += async (s,e) => await ConnectAndLoad();\n            FormClosed += (s,e) => { if (client != null) client.Dispose(); };
+            Shown += async (s,e) => await ConnectAndLoad();
+            FormClosed += (s,e) => { if (client != null) client.Dispose(); };
         }
         private TextBox AddText(TableLayoutPanel p, string label, string value)
         {
