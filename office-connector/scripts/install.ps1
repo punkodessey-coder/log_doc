@@ -17,7 +17,9 @@ if (-not (Test-Path "Registry::HKEY_USERS\$TargetSid")) {
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = New-Object Security.Principal.WindowsPrincipal($identity)
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-  throw "Для регистрации COM-компонента требуется подтверждение UAC. Запустите УСТАНОВИТЬ.bat."
+  $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -DllPath `"$DllPath`" -OfficeBitness $OfficeBitness -TargetSid $TargetSid"
+  $process = Start-Process -FilePath "powershell.exe" -Verb RunAs -ArgumentList $arguments -Wait -PassThru
+  exit $process.ExitCode
 }
 $full = (Resolve-Path $DllPath).Path
 $framework = if ($OfficeBitness -eq "x86") {
