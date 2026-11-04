@@ -33,7 +33,14 @@ namespace DocFlow.OfficeConnector
     public enum ext_ConnectMode { ext_cm_AfterStartup = 0, ext_cm_Startup = 1, ext_cm_External = 2, ext_cm_CommandLine = 3, ext_cm_Solution = 4, ext_cm_UISetup = 5 }
     public enum ext_DisconnectMode { ext_dm_HostShutdown = 0, ext_dm_UserClosed = 1, ext_dm_SolutionClosed = 2, ext_dm_UISetupComplete = 3 }
 
-    public abstract class OfficeAddinBase : IDTExtensibility2, IRibbonExtensibility
+    [Guid("6E7DCE2B-7B58-4C10-9A53-5B7A0E6C2F11"), InterfaceType(ComInterfaceType.InterfaceIsIDispatch)]
+    public interface IOfficeRibbonCallbacks
+    {
+        [DispId(10)] void OnUpload([MarshalAs(UnmanagedType.IDispatch)] object control);
+        [DispId(11)] void OnOpen([MarshalAs(UnmanagedType.IDispatch)] object control);
+    }
+
+    public abstract class OfficeAddinBase : IDTExtensibility2, IRibbonExtensibility, IOfficeRibbonCallbacks
     {
         protected object ApplicationObject;
         protected abstract string HostName { get; }
@@ -60,8 +67,10 @@ namespace DocFlow.OfficeConnector
             if (ApplicationObject == null) return;
             try
             {
+                if (upload) SaveActiveDocument();
+                // Resolve the path after Save: a new/unsaved Office document may
+                // receive its real FullName only after the Save As dialog completes.
                 string path = GetActiveFilePath();
-                if (upload && !String.IsNullOrWhiteSpace(path)) SaveActiveDocument();
                 using (var form = new ConnectorForm(ApplicationObject, HostName, upload, path))
                     form.ShowDialog();
             }
