@@ -1,5 +1,13 @@
 param([Parameter(Mandatory=$true)][string]$DllPath,[ValidateSet("Auto","x86","x64")][string]$OfficeBitness="Auto",[string]$TargetSid)
 $ErrorActionPreference="Stop"
+$script:DocFlowInstallLog = Join-Path $env:TEMP "DocFlow-OfficeConnector-install.log"
+try { Start-Transcript -Path $script:DocFlowInstallLog -Append -Force | Out-Null } catch {}
+trap {
+  Write-Host ("INSTALL ERROR: " + $_.Exception.Message) -ForegroundColor Red
+  if ($_.ScriptStackTrace) { Write-Host $_.ScriptStackTrace -ForegroundColor DarkGray }
+  try { Stop-Transcript | Out-Null } catch {}
+  exit 1
+}
 function Get-OfficeBitness {
   $ctr=Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration" -ErrorAction SilentlyContinue
   if($ctr -and $ctr.Platform -match '^(x86|x64)$'){return $ctr.Platform}
@@ -45,3 +53,4 @@ foreach($entry in $entries){
 }
 Write-Host "DocFlow Office Connector зарегистрирован (Office $OfficeBitness)." -ForegroundColor Green
 Write-Host "Установка локальная: GitHub и Интернет не используются." -ForegroundColor Gray
+try { Stop-Transcript | Out-Null } catch {}
