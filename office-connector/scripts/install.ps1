@@ -16,7 +16,7 @@ if($OfficeBitness -eq "Auto"){$OfficeBitness=Get-OfficeBitness}
 $identity=[Security.Principal.WindowsIdentity]::GetCurrent()
 $principal=New-Object Security.Principal.WindowsPrincipal($identity)
 if(-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){
-  $argumentList=@("-NoProfile","-ExecutionPolicy","Bypass","-File",$PSCommandPath,"-DllPath",$DllPath,"-OfficeBitness",$OfficeBitness,"-TargetSid",$TargetSid)
+  $argumentList="-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -DllPath `"$DllPath`" -OfficeBitness $OfficeBitness -TargetSid $TargetSid"
   $process=Start-Process -FilePath "powershell.exe" -Verb RunAs -ArgumentList $argumentList -Wait -PassThru
   exit $process.ExitCode
 }
