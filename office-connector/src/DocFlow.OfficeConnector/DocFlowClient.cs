@@ -31,7 +31,7 @@ namespace DocFlow.OfficeConnector
                 !String.IsNullOrEmpty(parsed.UserInfo) || !IsPrivateNetworkHost(parsed.Host))
                 throw new ArgumentException("Разрешён только адрес сервера DocFlow в локальной сети: используйте частный IP (10.x.x.x, 172.16-31.x.x, 192.168.x.x) или localhost.");
             BaseUrl = parsed.GetLeftPart(UriPartial.Path).TrimEnd('/');
-            var handler = new HttpClientHandler { CookieContainer = cookies, UseCookies = true, AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate };
+            var handler = new HttpClientHandler { CookieContainer = cookies, UseCookies = true, AllowAutoRedirect = false, AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate };
             http = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(5) };
         }
         private static bool IsPrivateNetworkHost(string host)
