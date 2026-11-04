@@ -55,7 +55,7 @@ jobs:
           echo Закройте Word, Excel и Visio перед продолжением.
           echo.
           set "DF_DLL=%~dp0bin\DocFlow.OfficeConnector.dll"
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\install.ps1" -DllPath "%DF_DLL%" -OfficeBitness x64
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\install.ps1" -DllPath "%DF_DLL%" -OfficeBitness Auto
           if errorlevel 1 (
             echo.
             echo Ошибка установки. Смотрите сообщение PowerShell выше.
@@ -69,7 +69,7 @@ jobs:
 
           @'
           DocFlow Office Connector — автономный пакет
-          Требования: Windows 10/11, настольный Microsoft Office 64-bit, .NET Framework 4.8.
+          Требования: Windows 10/11, настольный Microsoft Office x86/x64, .NET Framework 4.8.
           Установка: закройте Office и запустите УСТАНОВИТЬ.bat от имени обычного пользователя; UAC будет запрошен автоматически.
           Удаление: закройте Office и запустите УДАЛИТЬ.bat.
           Интернет и доступ к GitHub для установки не нужны.
@@ -93,7 +93,7 @@ jobs:
           echo Подключение к Интернету не используется.
           echo.
           set "DF_SELF=%~f0"
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $raw=[IO.File]::ReadAllText($env:DF_SELF); $marker='###DOCFLOW_PAYLOAD_BASE64###'; $pos=$raw.IndexOf($marker); if($pos -lt 0){throw 'Встроенный пакет не найден.'}; $b64=($raw.Substring($pos+$marker.Length) -replace '\s',''); $root=Join-Path $env:TEMP 'DocFlow-OfficeConnector-Setup'; New-Item -ItemType Directory -Force -Path $root | Out-Null; $zip=Join-Path $root 'payload.zip'; [IO.File]::WriteAllBytes($zip,[Convert]::FromBase64String($b64)); $dest=Join-Path $root 'package'; if(Test-Path $dest){Remove-Item $dest -Recurse -Force}; Expand-Archive -LiteralPath $zip -DestinationPath $dest -Force; $script=Join-Path $dest 'scripts\install.ps1'; $dll=Join-Path $dest 'bin\DocFlow.OfficeConnector.dll'; & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -DllPath $dll -OfficeBitness x64; exit $LASTEXITCODE"
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $raw=[IO.File]::ReadAllText($env:DF_SELF); $marker='###DOCFLOW_PAYLOAD_BASE64###'; $pos=$raw.IndexOf($marker); if($pos -lt 0){throw 'Встроенный пакет не найден.'}; $b64=($raw.Substring($pos+$marker.Length) -replace '\s',''); $root=Join-Path $env:TEMP 'DocFlow-OfficeConnector-Setup'; New-Item -ItemType Directory -Force -Path $root | Out-Null; $zip=Join-Path $root 'payload.zip'; [IO.File]::WriteAllBytes($zip,[Convert]::FromBase64String($b64)); $dest=Join-Path $root 'package'; if(Test-Path $dest){Remove-Item $dest -Recurse -Force}; Expand-Archive -LiteralPath $zip -DestinationPath $dest -Force; $script=Join-Path $dest 'scripts\install.ps1'; $dll=Join-Path $dest 'bin\DocFlow.OfficeConnector.dll'; & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -DllPath $dll -OfficeBitness Auto; exit $LASTEXITCODE"
           set "RC=%ERRORLEVEL%"
           if not "%RC%"=="0" (
             echo.
