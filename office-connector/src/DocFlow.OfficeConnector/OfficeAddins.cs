@@ -5,7 +5,7 @@ using Microsoft.Win32;
 
 namespace DocFlow.OfficeConnector
 {
-    [ComImport, Guid("000C0396-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsDual)]
+    [ComImport, Guid("000C0396-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     public interface IRibbonExtensibility
     {
         [DispId(1)]
