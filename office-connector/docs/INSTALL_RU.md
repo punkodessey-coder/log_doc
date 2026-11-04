@@ -34,7 +34,7 @@ Office и надстройка должны иметь совместимую р
 
 1. Закройте Word, Excel и Visio.
 2. Скопируйте папку `office-connector` на рабочий компьютер (или разверните её из общей сетевой папки только для чтения).
-3. Откройте PowerShell от имени того же пользователя Windows, который запускает Office. Права администратора для установки в HKCU не требуются.
+3. Откройте PowerShell **от имени администратора**. Скрипт регистрирует COM-классы через RegAsm и создаёт записи надстроек в профиле пользователя, который запускает скрипт. Поэтому запускайте его под той же учётной записью Windows, под которой работает Office.
 4. Выполните:
 
 ```powershell
@@ -42,7 +42,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 .\office-connector\scripts\install.ps1 -DllPath ".\office-connector\src\DocFlow.OfficeConnector\bin\Release\DocFlow.OfficeConnector.dll"
 ```
 
-Скрипт регистрирует COM-классы для Word, Excel и Visio в профиле текущего пользователя. Если установлен не весь пакет Office, ненужные записи можно удалить через `uninstall.ps1`.
+Скрипт регистрирует COM-классы для Word, Excel и Visio и создаёт записи надстроек в HKCU. Разрядность Office определяется по Click-to-Run; если Office установлен через MSI или определение не совпало, проверьте разрядность Office и используйте соответствующий RegAsm из `Framework` (x86) или `Framework64` (x64). Если установлен не весь пакет Office, ненужные записи можно удалить через `uninstall.ps1`.
 
 5. Запустите Word/Excel/Visio. На ленте появится вкладка **DocFlow**.
 
