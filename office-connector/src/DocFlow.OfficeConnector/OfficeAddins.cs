@@ -128,8 +128,8 @@ namespace DocFlow.OfficeConnector
 
     [ComVisible(true), Guid("B7D1C64C-84AE-4A67-9DB1-3B5C43E30101"), ProgId("DocFlow.WordAddin"), ClassInterface(ClassInterfaceType.None), ComDefaultInterface(typeof(IDocFlowOfficeAddinDispatch))]
     public class WordAddin : OfficeAddinBase { protected override string HostName { get { return "Word"; } } }
-    [ComVisible(true), Guid("B7D1C64C-84AE-4A67-9DB1-3B5C43E30102"), ProgId("DocFlow.ExcelAddin"), ClassInterface(ClassInterfaceType.None), ComDefaultInterface(typeof(IOfficeRibbonCallbacks))]
+    [ComVisible(true), Guid("B7D1C64C-84AE-4A67-9DB1-3B5C43E30102"), ProgId("DocFlow.ExcelAddin"), ClassInterface(ClassInterfaceType.None), ComDefaultInterface(typeof(IDocFlowOfficeAddinDispatch))]
     public class ExcelAddin : OfficeAddinBase { protected override string HostName { get { return "Excel"; } } }
-    [ComVisible(true), Guid("B7D1C64C-84AE-4A67-9DB1-3B5C43E30103"), ProgId("DocFlow.VisioAddin"), ClassInterface(ClassInterfaceType.None), ComDefaultInterface(typeof(IOfficeRibbonCallbacks))]
+    [ComVisible(true), Guid("B7D1C64C-84AE-4A67-9DB1-3B5C43E30103"), ProgId("DocFlow.VisioAddin"), ClassInterface(ClassInterfaceType.None), ComDefaultInterface(typeof(IDocFlowOfficeAddinDispatch))]
     public class VisioAddin : OfficeAddinBase { protected override string HostName { get { return "Visio"; } } }
 }
