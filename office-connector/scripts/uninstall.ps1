@@ -71,5 +71,7 @@ foreach ($entry in $entries) {
   }
 }
 
+Remove-Item -LiteralPath (Join-Path $env:ProgramFiles "DocFlow\\OfficeConnector") -Recurse -Force -ErrorAction SilentlyContinue
+
 Write-Host "DocFlow удалён из Word, Excel и Visio. Записи COM-классов очищены для обеих разрядностей." -ForegroundColor Green
 Write-Host "Документы и данные на сервере DocFlow не затронуты." -ForegroundColor Gray
