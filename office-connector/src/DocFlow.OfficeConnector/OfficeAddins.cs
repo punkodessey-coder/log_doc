@@ -15,7 +15,7 @@ namespace DocFlow.OfficeConnector
 
     // Office imports IDTExtensibility2 by its official COM IID. ComImport ensures
     // the managed COM Callable Wrapper exposes the real Office interface through QueryInterface.
-    [ComImport, Guid("B65AD801-ABAF-11D0-BB8B-00A0C90F2744"), InterfaceType(ComInterfaceType.InterfaceIsIDispatch), TypeLibType(TypeLibTypeFlags.FHidden | TypeLibTypeFlags.FDispatchable)]
+    [ComImport, Guid("B65AD801-ABAF-11D0-BB8B-00A0C90F2744"), InterfaceType(ComInterfaceType.InterfaceIsDual), TypeLibType(TypeLibTypeFlags.FHidden | TypeLibTypeFlags.FDispatchable)]
     public interface IDTExtensibility2
     {
         [DispId(1)]
