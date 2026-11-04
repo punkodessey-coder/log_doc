@@ -75,6 +75,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: DocFlow-Office-Connector-Win11-Office-x64
-          path: dist/DocFlow-Office-Connector-Win11-Office-x64.zip
+          path: dist/DocFlow-Office-Connector-Win11-Office-x64/
           if-no-files-found: error
           retention-days: 30
