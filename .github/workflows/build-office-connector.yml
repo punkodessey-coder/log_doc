@@ -52,11 +52,7 @@ jobs:
           pause
           '@ | Set-Content -Encoding UTF8 "$package/УСТАНОВИТЬ.bat"
           @'
-          @echo off
-          chcp 65001 >nul
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\uninstall.ps1" -DllPath "%~dp0bin\DocFlow.OfficeConnector.dll" -OfficeBitness x64
-          pause
-          '@ | Set-Content -Encoding UTF8 "$package/УДАЛИТЬ.bat"
+          Copy-Item 'office-connector/DocFlow_Office_Uninstall.bat' "$package/УДАЛИТЬ.bat"
           @'
           DocFlow Office Connector
           Сборка: Windows x64 / Microsoft Office 64-bit / .NET Framework 4.8
