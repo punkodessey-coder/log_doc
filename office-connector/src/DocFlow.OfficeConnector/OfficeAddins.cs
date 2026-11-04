@@ -16,7 +16,7 @@ namespace DocFlow.OfficeConnector
     // Office defines IDTExtensibility2 as an IDispatch interface. The IID below
     // is the official Office IID; using InterfaceIsIUnknown prevents Office from
     // invoking the lifecycle methods through the expected dispatch contract.
-    [Guid("000C0601-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIDispatch)]
+    [Guid("B65AD801-ABAF-11D0-BB8B-00A0C90F2744"), InterfaceType(ComInterfaceType.InterfaceIsIDispatch)]
     public interface IDTExtensibility2
     {
         [DispId(1)]
@@ -91,10 +91,10 @@ namespace DocFlow.OfficeConnector
         }
     }
 
-    [ComVisible(true), Guid("B7D1C64C-84AE-4A67-9DB1-3B5C43E30101"), ProgId("DocFlow.WordAddin"), ClassInterface(ClassInterfaceType.None)]
+    [ComVisible(true), Guid("B7D1C64C-84AE-4A67-9DB1-3B5C43E30101"), ProgId("DocFlow.WordAddin"), ClassInterface(ClassInterfaceType.None), ComDefaultInterface(typeof(IOfficeRibbonCallbacks))]
     public class WordAddin : OfficeAddinBase { protected override string HostName { get { return "Word"; } } }
-    [ComVisible(true), Guid("B7D1C64C-84AE-4A67-9DB1-3B5C43E30102"), ProgId("DocFlow.ExcelAddin"), ClassInterface(ClassInterfaceType.None)]
+    [ComVisible(true), Guid("B7D1C64C-84AE-4A67-9DB1-3B5C43E30102"), ProgId("DocFlow.ExcelAddin"), ClassInterface(ClassInterfaceType.None), ComDefaultInterface(typeof(IOfficeRibbonCallbacks))]
     public class ExcelAddin : OfficeAddinBase { protected override string HostName { get { return "Excel"; } } }
-    [ComVisible(true), Guid("B7D1C64C-84AE-4A67-9DB1-3B5C43E30103"), ProgId("DocFlow.VisioAddin"), ClassInterface(ClassInterfaceType.None)]
+    [ComVisible(true), Guid("B7D1C64C-84AE-4A67-9DB1-3B5C43E30103"), ProgId("DocFlow.VisioAddin"), ClassInterface(ClassInterfaceType.None), ComDefaultInterface(typeof(IOfficeRibbonCallbacks))]
     public class VisioAddin : OfficeAddinBase { protected override string HostName { get { return "Visio"; } } }
 }
