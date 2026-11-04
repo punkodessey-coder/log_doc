@@ -16,7 +16,7 @@ namespace DocFlow.OfficeConnector
     // Office defines IDTExtensibility2 as an IDispatch interface. The IID below
     // is the official Office IID; using InterfaceIsIUnknown prevents Office from
     // invoking the lifecycle methods through the expected dispatch contract.
-    [Guid("B65AD801-ABAF-11D0-BB8B-00A0C90F2744"), InterfaceType(ComInterfaceType.InterfaceIsIDispatch)]
+    [Guid("B65AD801-ABAF-11D0-BB8B-00A0C90F2744"), InterfaceType(ComInterfaceType.InterfaceIsIDispatch), TypeLibType(TypeLibTypeFlags.FHidden | TypeLibTypeFlags.FDispatchable)]
     public interface IDTExtensibility2
     {
         [DispId(1)]
@@ -30,8 +30,10 @@ namespace DocFlow.OfficeConnector
         [DispId(5)]
         void OnBeginShutdown(ref Array custom);
     }
+    [Guid("289E9AF1-4973-11D1-AE81-00A0C90F26F4")]
     public enum ext_ConnectMode { ext_cm_AfterStartup = 0, ext_cm_Startup = 1, ext_cm_External = 2, ext_cm_CommandLine = 3, ext_cm_Solution = 4, ext_cm_UISetup = 5 }
-    public enum ext_DisconnectMode { ext_dm_HostShutdown = 0, ext_dm_UserClosed = 1, ext_dm_SolutionClosed = 2, ext_dm_UISetupComplete = 3 }
+    [Guid("289E9AF2-4973-11D1-AE81-00A0C90F26F4")]
+    public enum ext_DisconnectMode { ext_dm_HostShutdown = 0, ext_dm_UserClosed = 1, ext_dm_UISetupComplete = 2, ext_dm_SolutionClosed = 3 }
 
     [Guid("6E7DCE2B-7B58-4C10-9A53-5B7A0E6C2F11"), InterfaceType(ComInterfaceType.InterfaceIsIDispatch)]
     public interface IOfficeRibbonCallbacks
@@ -44,14 +46,40 @@ namespace DocFlow.OfficeConnector
     {
         protected object ApplicationObject;
         protected abstract string HostName { get; }
-        public void OnConnection(object application, ext_ConnectMode mode, object addInInst, ref Array custom) { ApplicationObject = application; }
-        public void OnDisconnection(ext_DisconnectMode mode, ref Array custom) { ApplicationObject = null; }
-        public void OnAddInsUpdate(ref Array custom) { }
-        public void OnStartupComplete(ref Array custom) { }
-        public void OnBeginShutdown(ref Array custom) { ApplicationObject = null; }
+        private static readonly object LogLock = new object();
+        private static string LogPath
+        {
+            get { return System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DocFlow", "OfficeConnector.log"); }
+        }
+        protected static void Log(string message)
+        {
+            try
+            {
+                lock (LogLock)
+                {
+                    string path = LogPath;
+                    System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path));
+                    System.IO.File.AppendAllText(path, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " [" + System.Threading.Thread.CurrentThread.ManagedThreadId + "] " + message + Environment.NewLine);
+                }
+            }
+            catch { }
+        }
+
+        protected OfficeAddinBase() { Log("Constructor: " + GetType().FullName + " loaded."); }
+        public void OnConnection(object application, ext_ConnectMode mode, object addInInst, ref Array custom)
+        {
+            Log(HostName + ": OnConnection entered; mode=" + mode);
+            try { ApplicationObject = application; Log(HostName + ": OnConnection completed."); }
+            catch (Exception ex) { Log(HostName + ": OnConnection ERROR: " + ex); }
+        }
+        public void OnDisconnection(ext_DisconnectMode mode, ref Array custom) { Log(HostName + ": OnDisconnection; mode=" + mode); ApplicationObject = null; }
+        public void OnAddInsUpdate(ref Array custom) { Log(HostName + ": OnAddInsUpdate."); }
+        public void OnStartupComplete(ref Array custom) { Log(HostName + ": OnStartupComplete."); }
+        public void OnBeginShutdown(ref Array custom) { Log(HostName + ": OnBeginShutdown."); ApplicationObject = null; }
 
         public string GetCustomUI(string ribbonID)
         {
+            Log(HostName + ": GetCustomUI; ribbonID=" + ribbonID);
             return @"<customUI xmlns=""http://schemas.microsoft.com/office/2009/07/customui"">
               <ribbon><tabs><tab id=""DocFlowTab"" label=""DocFlow"">
                 <group id=""DocFlowGroup"" label=""Хранилище документов"">
