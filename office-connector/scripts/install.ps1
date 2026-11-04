@@ -21,7 +21,12 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
   $process = Start-Process -FilePath "powershell.exe" -Verb RunAs -ArgumentList $arguments -Wait -PassThru
   exit $process.ExitCode
 }
-$full = (Resolve-Path $DllPath).Path
+$sourceDll = (Resolve-Path -LiteralPath $DllPath).Path
+$installRoot = Join-Path $env:ProgramFiles "DocFlow\\OfficeConnector"
+New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
+$full = Join-Path $installRoot "DocFlow.OfficeConnector.dll"
+Copy-Item -LiteralPath $sourceDll -Destination $full -Force
+
 $framework = if ($OfficeBitness -eq "x86") {
   Join-Path $env:WINDIR "Microsoft.NET\Framework\v4.0.30319\RegAsm.exe"
 } else {
