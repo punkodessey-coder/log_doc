@@ -25,7 +25,7 @@ jobs:
       - name: Build x64-compatible .NET Framework 4.8 add-in
         shell: pwsh
         run: |
-          msbuild office-connector/src/DocFlow.OfficeConnector/DocFlow.OfficeConnector.csproj /m /t:Rebuild /p:Configuration=Release /p:Platform=AnyCPU /p:TargetFrameworkRootPath="$env:ProgramFiles(x86)\Reference Assemblies\Microsoft\Framework\"
+          msbuild office-connector/src/DocFlow.OfficeConnector/DocFlow.OfficeConnector.csproj /m /t:Rebuild /restore /p:Configuration=Release /p:Platform=AnyCPU
 
       - name: Assemble installation package
         shell: pwsh
