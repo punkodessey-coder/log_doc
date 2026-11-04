@@ -40,9 +40,16 @@ jobs:
           @'
           @echo off
           chcp 65001 >nul
-          set "ROOT=%~dp0"
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Start-Process PowerShell.exe -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File ""%ROOT%scripts\install.ps1"" -DllPath ""%ROOT%bin\DocFlow.OfficeConnector.dll""'"
-          if errorlevel 1 pause
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\install.ps1" -DllPath "%~dp0bin\DocFlow.OfficeConnector.dll" -OfficeBitness x64
+          if errorlevel 1 (
+            echo.
+            echo Installation failed. See the PowerShell error above.
+            pause
+            exit /b 1
+          )
+          echo.
+          echo Installation completed. Restart Word, Excel or Visio.
+          pause
           '@ | Set-Content -Encoding UTF8 "$package/УСТАНОВИТЬ.bat"
           @'
           @echo off
