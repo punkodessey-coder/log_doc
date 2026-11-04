@@ -10,7 +10,7 @@ on:
       - '.github/workflows/build-office-connector.yml'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -18,6 +18,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: true
 
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
@@ -108,6 +110,18 @@ jobs:
           $standalone = $standalone.Replace("          ", "")
           $standalone += "`r`n" + $wrapped + "`r`n"
           [IO.File]::WriteAllText('dist/DocFlow_Office_Install.bat', $standalone, [Text.Encoding]::ASCII)
+
+
+      - name: Publish standalone installer to repository
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Copy-Item 'dist/DocFlow_Office_Install.bat' 'office-connector/DocFlow_Office_Install.bat' -Force
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add 'office-connector/DocFlow_Office_Install.bat'
+          git commit -m 'Publish offline DocFlow Office installer [skip ci]'
+          git push
 
       - name: Upload offline installers
         uses: actions/upload-artifact@v4
