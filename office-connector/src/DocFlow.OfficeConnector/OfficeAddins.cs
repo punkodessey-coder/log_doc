@@ -8,7 +8,7 @@ namespace DocFlow.OfficeConnector
     [ComImport, Guid("000C0396-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     public interface IRibbonExtensibility { [return: MarshalAs(UnmanagedType.BStr)] string GetCustomUI([MarshalAs(UnmanagedType.BStr)] string ribbonID); }
 
-    [ComImport, Guid("B65AD801-ABAF-11D0-BB8B-00A0C90F2744"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    [ComImport, Guid("000C0601-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     public interface IDTExtensibility2
     {
         void OnConnection([MarshalAs(UnmanagedType.IDispatch)] object application, ext_ConnectMode connectMode, [MarshalAs(UnmanagedType.IDispatch)] object addInInst, ref Array custom);
@@ -17,8 +17,8 @@ namespace DocFlow.OfficeConnector
         void OnStartupComplete(ref Array custom);
         void OnBeginShutdown(ref Array custom);
     }
-    public enum ext_ConnectMode { ext_cm_AfterStartup = 0, ext_cm_Startup = 1, ext_cm_External = 2, ext_cm_CommandLine = 3, ext_cm_ solution = 4, ext_cm_UISetup = 5 }
-    public enum ext_DisconnectMode { ext_dm_HostShutdown = 0, ext_dm_UserClosed = 1, ext_dm_ solutionClosed = 2, ext_dm_UISetupComplete = 3 }
+    public enum ext_ConnectMode { ext_cm_AfterStartup = 0, ext_cm_Startup = 1, ext_cm_External = 2, ext_cm_CommandLine = 3, ext_cm_Solution = 4, ext_cm_UISetup = 5 }
+    public enum ext_DisconnectMode { ext_dm_HostShutdown = 0, ext_dm_UserClosed = 1, ext_dm_SolutionClosed = 2, ext_dm_UISetupComplete = 3 }
 
     public abstract class OfficeAddinBase : IDTExtensibility2, IRibbonExtensibility
     {
@@ -57,13 +57,14 @@ namespace DocFlow.OfficeConnector
         private string GetActiveFilePath()
         {
             dynamic app = ApplicationObject;
-            dynamic doc = app.ActiveDocument;
+            dynamic doc = HostName == "Excel" ? app.ActiveWorkbook : app.ActiveDocument;
             try { return Convert.ToString(doc.FullName); } catch { return ""; }
         }
         private void SaveActiveDocument()
         {
             dynamic app = ApplicationObject;
-            dynamic doc = app.ActiveDocument;
+            dynamic doc = HostName == "Excel" ? app.ActiveWorkbook : app.ActiveDocument;
+            if (doc == null) throw new InvalidOperationException("Нет активного документа.");
             doc.Save();
         }
     }
