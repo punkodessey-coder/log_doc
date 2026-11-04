@@ -25,9 +25,27 @@ namespace DocFlow.OfficeConnector
         public string BaseUrl { get; private set; }
         public DocFlowClient(string baseUrl)
         {
-            BaseUrl = baseUrl.TrimEnd('/');
+            Uri parsed;
+            if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out parsed) ||
+                (parsed.Scheme != Uri.UriSchemeHttp && parsed.Scheme != Uri.UriSchemeHttps) ||
+                !String.IsNullOrEmpty(parsed.UserInfo) || !IsPrivateNetworkHost(parsed.Host))
+                throw new ArgumentException("Разрешён только адрес сервера DocFlow в локальной сети: используйте частный IP (10.x.x.x, 172.16-31.x.x, 192.168.x.x) или localhost.");
+            BaseUrl = parsed.GetLeftPart(UriPartial.Path).TrimEnd('/');
+            if (parsed.IsDefaultPort == false) BaseUrl += ":" + parsed.Port;
             var handler = new HttpClientHandler { CookieContainer = cookies, UseCookies = true, AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate };
             http = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(5) };
+        }
+        private static bool IsPrivateNetworkHost(string host)
+        {
+            if (String.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase)) return true;
+            IPAddress ip;
+            if (!IPAddress.TryParse(host, out ip)) return false;
+            if (ip.IsIPv4MappedToIPv6) ip = ip.MapToIPv4();
+            byte[] b = ip.GetAddressBytes();
+            if (ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                return b[0] == 10 || b[0] == 127 || (b[0] == 192 && b[1] == 168) ||
+                       (b[0] == 172 && b[1] >= 16 && b[1] <= 31) || (b[0] == 169 && b[1] == 254);
+            return IPAddress.IsLoopback(ip) || ip.IsIPv6LinkLocal || (b.Length == 16 && (b[0] & 0xFE) == 0xFC);
         }
         private string Url(string path) { return BaseUrl + path; }
         private async Task<string> Read(HttpResponseMessage response)
