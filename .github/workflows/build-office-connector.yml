@@ -54,7 +54,7 @@ jobs:
           @'
           @echo off
           chcp 65001 >nul
-          powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\uninstall.ps1"
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\uninstall.ps1" -DllPath "%~dp0bin\DocFlow.OfficeConnector.dll" -OfficeBitness x64
           pause
           '@ | Set-Content -Encoding UTF8 "$package/УДАЛИТЬ.bat"
           @'
