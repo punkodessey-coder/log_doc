@@ -106,8 +106,10 @@ namespace DocFlow.OfficeConnector
             try
             {
                 documentItems = await client.Documents(f.Id, b.Id);
+                if (uploadMode) documentItems.Insert(0, new ApiItem { Id = "", Name = "— Новый документ / автоматически по имени файла —" });
                 documents.DataSource = documentItems; documents.DisplayMember = "Name";
-                if (documentItems.Count > 0) await LoadVersions();
+                if (uploadMode) { documents.SelectedIndex = 0; versions.DataSource = null; }
+                else if (documentItems.Count > 0) await LoadVersions();
             }
             catch (Exception ex) { SetStatus("Ошибка загрузки документов: " + ex.Message); }
         }
@@ -131,7 +133,7 @@ namespace DocFlow.OfficeConnector
                     if (String.IsNullOrWhiteSpace(activePath) || !File.Exists(activePath)) throw new InvalidOperationException("Сначала сохраните документ на диск в Office.");
                     var f = folders.SelectedItem as ApiItem; if (f == null) throw new InvalidOperationException("Выберите папку.");
                     var d = documents.SelectedItem as ApiItem;
-                    string result = d != null
+                    string result = d != null && !String.IsNullOrEmpty(d.Id)
                         ? await client.UploadVersion(d.Id, b.Id, activePath, comment.Text)
                         : await client.UploadNew(f.Id, b.Id, activePath, comment.Text);
                     MessageBox.Show("Ответ DocFlow:\r\n" + result, "DocFlow", MessageBoxButtons.OK, MessageBoxIcon.Information);
