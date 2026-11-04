@@ -1,0 +1,73 @@
+name: Build DocFlow Office Connector
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/office-connector
+    paths:
+      - 'office-connector/**'
+      - '.github/workflows/build-office-connector.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build x64-compatible .NET Framework 4.8 add-in
+        shell: pwsh
+        run: |
+          msbuild office-connector/src/DocFlow.OfficeConnector/DocFlow.OfficeConnector.csproj /m /t:Rebuild /p:Configuration=Release /p:Platform=AnyCPU /p:TargetFrameworkRootPath="$env:ProgramFiles(x86)\Reference Assemblies\Microsoft\Framework\"
+
+      - name: Assemble installation package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $package = 'dist/DocFlow-Office-Connector-Win11-Office-x64'
+          New-Item -ItemType Directory -Force -Path "$package/bin", "$package/scripts", "$package/docs" | Out-Null
+          Copy-Item 'office-connector/src/DocFlow.OfficeConnector/bin/Release/DocFlow.OfficeConnector.dll' "$package/bin/"
+          Copy-Item 'office-connector/scripts/install.ps1' "$package/scripts/"
+          Copy-Item 'office-connector/scripts/uninstall.ps1' "$package/scripts/"
+          Copy-Item 'office-connector/docs/INSTALL_RU.md' "$package/INSTALL_RU.md"
+          @'
+          @echo off
+          chcp 65001 >nul
+          set "ROOT=%~dp0"
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Start-Process PowerShell.exe -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File ""%ROOT%scripts\install.ps1"" -DllPath ""%ROOT%bin\DocFlow.OfficeConnector.dll""'"
+          if errorlevel 1 pause
+          '@ | Set-Content -Encoding UTF8 "$package/УСТАНОВИТЬ.bat"
+          @'
+          @echo off
+          chcp 65001 >nul
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\uninstall.ps1"
+          pause
+          '@ | Set-Content -Encoding UTF8 "$package/УДАЛИТЬ.bat"
+          @'
+          DocFlow Office Connector
+          Сборка: Windows x64 / Microsoft Office 64-bit / .NET Framework 4.8
+          
+          Установка:
+          1. Закройте Word, Excel и Visio.
+          2. Запустите УСТАНОВИТЬ.bat.
+          3. Подтвердите запрос контроля учётных записей Windows.
+          4. Откройте Office. На вкладке DocFlow укажите адрес сервера DocFlow в локальной сети.
+          
+          Удаление: закройте Office и запустите УДАЛИТЬ.bat.
+          '@ | Set-Content -Encoding UTF8 "$package/ПРОЧИТАЙТЕ.txt"
+          Compress-Archive -Path "$package/*" -DestinationPath 'dist/DocFlow-Office-Connector-Win11-Office-x64.zip' -Force
+
+      - name: Upload installer ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: DocFlow-Office-Connector-Win11-Office-x64
+          path: dist/DocFlow-Office-Connector-Win11-Office-x64.zip
+          if-no-files-found: error
+          retention-days: 30
