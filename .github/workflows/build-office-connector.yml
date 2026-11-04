@@ -9,6 +9,10 @@ on:
       - 'office-connector/**'
       - '.github/workflows/build-office-connector.yml'
 
+concurrency:
+  group: office-connector-build-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
