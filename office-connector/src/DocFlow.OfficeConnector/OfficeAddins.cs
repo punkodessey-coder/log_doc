@@ -35,14 +35,21 @@ namespace DocFlow.OfficeConnector
     [Guid("289E9AF2-4973-11D1-AE81-00A0C90F26F4")]
     public enum ext_DisconnectMode { ext_dm_HostShutdown = 0, ext_dm_UserClosed = 1, ext_dm_UISetupComplete = 2, ext_dm_SolutionClosed = 3 }
 
-    [Guid("6E7DCE2B-7B58-4C10-9A53-5B7A0E6C2F11"), InterfaceType(ComInterfaceType.InterfaceIsIDispatch)]
-    public interface IOfficeRibbonCallbacks
+    // The default IDispatch must expose both Office lifecycle methods and Ribbon callbacks.
+    // IDTExtensibility2 remains implemented separately with its official IID for Office QueryInterface.
+    [Guid("A2B34E12-5E0B-4A76-9C83-7D0B2F5A6101"), InterfaceType(ComInterfaceType.InterfaceIsIDispatch)]
+    public interface IDocFlowOfficeAddinDispatch
     {
+        [DispId(1)] void OnConnection([MarshalAs(UnmanagedType.IDispatch)] object application, ext_ConnectMode connectMode, [MarshalAs(UnmanagedType.IDispatch)] object addInInst, ref Array custom);
+        [DispId(2)] void OnDisconnection(ext_DisconnectMode removeMode, ref Array custom);
+        [DispId(3)] void OnAddInsUpdate(ref Array custom);
+        [DispId(4)] void OnStartupComplete(ref Array custom);
+        [DispId(5)] void OnBeginShutdown(ref Array custom);
         [DispId(10)] void OnUpload([MarshalAs(UnmanagedType.IDispatch)] object control);
         [DispId(11)] void OnOpen([MarshalAs(UnmanagedType.IDispatch)] object control);
     }
 
-    public abstract class OfficeAddinBase : IDTExtensibility2, IRibbonExtensibility, IOfficeRibbonCallbacks
+    public abstract class OfficeAddinBase : IDTExtensibility2, IRibbonExtensibility, IDocFlowOfficeAddinDispatch
     {
         protected object ApplicationObject;
         protected abstract string HostName { get; }
@@ -119,7 +126,7 @@ namespace DocFlow.OfficeConnector
         }
     }
 
-    [ComVisible(true), Guid("B7D1C64C-84AE-4A67-9DB1-3B5C43E30101"), ProgId("DocFlow.WordAddin"), ClassInterface(ClassInterfaceType.None), ComDefaultInterface(typeof(IOfficeRibbonCallbacks))]
+    [ComVisible(true), Guid("B7D1C64C-84AE-4A67-9DB1-3B5C43E30101"), ProgId("DocFlow.WordAddin"), ClassInterface(ClassInterfaceType.None), ComDefaultInterface(typeof(IDocFlowOfficeAddinDispatch))]
     public class WordAddin : OfficeAddinBase { protected override string HostName { get { return "Word"; } } }
     [ComVisible(true), Guid("B7D1C64C-84AE-4A67-9DB1-3B5C43E30102"), ProgId("DocFlow.ExcelAddin"), ClassInterface(ClassInterfaceType.None), ComDefaultInterface(typeof(IOfficeRibbonCallbacks))]
     public class ExcelAddin : OfficeAddinBase { protected override string HostName { get { return "Excel"; } } }
