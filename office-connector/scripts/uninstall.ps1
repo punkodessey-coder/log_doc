@@ -1,9 +1,9 @@
 param([string]$DllPath,[ValidateSet("Auto","x86","x64")][string]$OfficeBitness="Auto",[string]$TargetSid)
 $ErrorActionPreference="Stop"
 if([string]::IsNullOrWhiteSpace($TargetSid)){$TargetSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value}
-if(-not(Test-Path "Registry::HKEY_USERS\$TargetSid")){throw "Профиль пользователя $TargetSid не загружен."}
+if(-not(Test-Path "Registry::HKEY_USERS\$TargetSid")){throw "The user profile $TargetSid is not loaded."}
 $officeProcesses=Get-Process WINWORD,EXCEL,VISIO -ErrorAction SilentlyContinue
-if($officeProcesses){$names=($officeProcesses|Select-Object -ExpandProperty ProcessName -Unique)-join ", ";throw "Закройте приложения Office ($names) и повторите удаление."}
+if($officeProcesses){$names=($officeProcesses|Select-Object -ExpandProperty ProcessName -Unique)-join ", ";throw "Close Office applications ($names) and run the uninstaller again."}
 $identity=[Security.Principal.WindowsIdentity]::GetCurrent()
 $principal=New-Object Security.Principal.WindowsPrincipal($identity)
 if(-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){
@@ -30,4 +30,4 @@ foreach($entry in $entries){
 }
 $installRoot=Join-Path $env:ProgramFiles "DocFlow\OfficeConnector"
 Remove-Item -LiteralPath $installRoot -Recurse -Force -ErrorAction SilentlyContinue
-Write-Host "DocFlow удалён из Word, Excel и Visio. Данные сервера не затронуты." -ForegroundColor Green
+Write-Host "DocFlow was removed from Word, Excel and Visio. Server data was not changed." -ForegroundColor Green
