@@ -14,12 +14,12 @@ function Get-OfficeBitness {
   foreach($key in @("HKLM:\SOFTWARE\Microsoft\Office\16.0\Word\InstallRoot","HKLM:\SOFTWARE\WOW6432Node\Microsoft\Office\16.0\Word\InstallRoot","HKLM:\SOFTWARE\Microsoft\Office\15.0\Word\InstallRoot","HKLM:\SOFTWARE\WOW6432Node\Microsoft\Office\15.0\Word\InstallRoot")){
     if(Test-Path $key){if($key -match 'WOW6432Node'){return "x86"}else{return "x64"}}
   }
-  throw "Не удалось определить разрядность Office. Укажите x86 или x64."
+  throw "Unable to detect Office bitness. Specify x86 or x64."
 }
 if([string]::IsNullOrWhiteSpace($TargetSid)){$TargetSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value}
-if(-not(Test-Path "Registry::HKEY_USERS\$TargetSid")){throw "Профиль пользователя $TargetSid не загружен."}
+if(-not(Test-Path "Registry::HKEY_USERS\$TargetSid")){throw "The user profile $TargetSid is not loaded."}
 $officeProcesses=Get-Process WINWORD,EXCEL,VISIO -ErrorAction SilentlyContinue
-if($officeProcesses){$names=($officeProcesses|Select-Object -ExpandProperty ProcessName -Unique)-join ", ";throw "Закройте приложения Office ($names) и повторите установку."}
+if($officeProcesses){$names=($officeProcesses|Select-Object -ExpandProperty ProcessName -Unique)-join ", ";throw "Close Office applications ($names) and run the installer again."}
 if($OfficeBitness -eq "Auto"){$OfficeBitness=Get-OfficeBitness}
 $identity=[Security.Principal.WindowsIdentity]::GetCurrent()
 $principal=New-Object Security.Principal.WindowsPrincipal($identity)
@@ -35,9 +35,9 @@ $full=Join-Path $installRoot "DocFlow.OfficeConnector.dll"
 Copy-Item -LiteralPath $sourceDll -Destination $full -Force
 $frameworkDir=if($OfficeBitness -eq "x86"){"Framework"}else{"Framework64"}
 $framework=Join-Path $env:WINDIR "Microsoft.NET\$frameworkDir\v4.0.30319\RegAsm.exe"
-if(-not(Test-Path $framework)){throw ".NET Framework RegAsm.exe не найден: $framework"}
+if(-not(Test-Path $framework)){throw ".NET Framework RegAsm.exe was not found: $framework"}
 & $framework $full /codebase
-if($LASTEXITCODE -ne 0){throw "RegAsm завершился с кодом $LASTEXITCODE"}
+if($LASTEXITCODE -ne 0){throw "RegAsm failed with exit code $LASTEXITCODE"}
 $entries=@(
  @{App="Word";ProgId="DocFlow.WordAddin";Description="DocFlow Office Connector for Word"},
  @{App="Excel";ProgId="DocFlow.ExcelAddin";Description="DocFlow Office Connector for Excel"},
@@ -51,6 +51,6 @@ foreach($entry in $entries){
  New-ItemProperty -Path $key -Name LoadBehavior -Value 3 -PropertyType DWord -Force|Out-Null
  New-ItemProperty -Path $key -Name CommandLineSafe -Value 0 -PropertyType DWord -Force|Out-Null
 }
-Write-Host "DocFlow Office Connector зарегистрирован (Office $OfficeBitness)." -ForegroundColor Green
-Write-Host "Установка локальная: GitHub и Интернет не используются." -ForegroundColor Gray
+Write-Host "DocFlow Office Connector registered (Office $OfficeBitness)." -ForegroundColor Green
+Write-Host "Offline installation: GitHub and Internet are not used." -ForegroundColor Gray
 try { Stop-Transcript | Out-Null } catch {}
